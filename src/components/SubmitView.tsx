@@ -15,7 +15,6 @@ interface SubmitViewProps {
   onTriggerModerator: (passkey: string) => void;
   onTriggerAdminPasskey: () => void;
   onNavigateToFeed: () => void;
-  onOpenModeratorLogin?: () => void;
   publicCount: number;
 }
 
@@ -24,7 +23,6 @@ export function SubmitView({
   onTriggerModerator,
   onTriggerAdminPasskey,
   onNavigateToFeed,
-  onOpenModeratorLogin,
 }: SubmitViewProps) {
   const [content, setContent] = useState('');
   const [authorName, setAuthorName] = useState('Student');
@@ -45,15 +43,7 @@ export function SubmitView({
       return;
     }
 
-    // 2. Check for revoked default passkey: alert user and NEVER post to questions board
-    if (trimmed === 'StudentInclusion2026') {
-      setErrorMessage(
-        'The passkey "StudentInclusion2026" was permanently revoked when the new passkey was confirmed. Only your newly confirmed active passkey is accepted.'
-      );
-      return;
-    }
-
-    // 3. Check for secret moderator keyword trigger
+    // 2. Check for secret moderator passkey trigger (e.g. initial 'StudentInclusion2026' or updated passkey)
     setIsSubmitting(true);
     setErrorMessage(null);
 
@@ -66,11 +56,10 @@ export function SubmitView({
         return;
       }
     } catch {
-      // Continue to check
+      // Continue to question submission
     }
 
-    // 4. If this looks like a failed passkey entry attempt (short, single-word, no spaces, no punctuation)
-    // Do NOT post it as a public anonymous question!
+    // 3. If this is a short single-word string without punctuation, avoid posting mistyped passkeys to the public feed
     if (
       trimmed.length <= 25 &&
       !trimmed.includes(' ') &&
@@ -80,12 +69,12 @@ export function SubmitView({
     ) {
       setIsSubmitting(false);
       setErrorMessage(
-        'Invalid passkey. If you are attempting to log in as Moderator, only the currently active passkey is accepted. Click "Moderator" in the header or check your passkey.'
+        'Please enter a complete question or thought for the community.'
       );
       return;
     }
 
-    // 5. Genuine student question submission
+    // 4. Genuine student question submission
     try {
       await submitQuestion(content.trim(), authorName.trim() || 'Student');
 

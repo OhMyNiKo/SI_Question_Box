@@ -7,7 +7,6 @@ interface HeaderProps {
   setActiveView: (view: ActiveView) => void;
   isModerator: boolean;
   onLogoutModerator: () => void;
-  onOpenModeratorLogin?: () => void;
   publicCount: number;
 }
 
@@ -16,7 +15,6 @@ export function Header({
   setActiveView,
   isModerator,
   onLogoutModerator,
-  onOpenModeratorLogin,
 }: HeaderProps) {
   return (
     <header className="w-full max-w-7xl mx-auto px-4 sm:px-8 lg:px-12 pt-4 pb-2 lg:pt-8 lg:pb-3 flex items-center justify-between z-20 relative shrink-0">
@@ -72,20 +70,6 @@ export function Header({
           <span>Public Q&A</span>
           <ArrowUpRight className="w-3.5 h-3.5 sm:w-4 sm:h-4 stroke-[2.5]" />
         </motion.button>
-
-        {!isModerator && onOpenModeratorLogin && (
-          <motion.button
-            whileTap={{ scale: 0.94 }}
-            whileHover={{ scale: 1.02 }}
-            id="nav-moderator-login-btn"
-            onClick={onOpenModeratorLogin}
-            title="Moderator Access"
-            className="px-3 py-2 sm:px-3.5 sm:py-2.5 rounded-full text-xs font-semibold text-stone-600 hover:text-[#0D1527] hover:bg-stone-100 flex items-center gap-1.5 transition-all cursor-pointer border border-stone-300"
-          >
-            <Lock className="w-3.5 h-3.5 text-stone-500" />
-            <span className="hidden sm:inline">Moderator</span>
-          </motion.button>
-        )}
 
         <AnimatePresence>
           {isModerator && (
