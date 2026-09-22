@@ -7,6 +7,7 @@ import {
   Check,
   User,
 } from 'lucide-react';
+import { submitQuestion } from '../services/questionsService';
 
 interface SubmitViewProps {
   onQuestionSubmitted: () => void;
@@ -41,25 +42,14 @@ export function SubmitView({
       setIsSubmitting(true);
       setErrorMessage(null);
 
-      const res = await fetch('/api/questions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          content: content.trim(),
-          authorName: authorName.trim() || 'Student',
-        }),
-      });
-
-      if (!res.ok) {
-        throw new Error('Failed to submit question. Please try again.');
-      }
+      await submitQuestion(content.trim(), authorName.trim() || 'Student');
 
       setContent('');
       setSubmittedSuccess(true);
       onQuestionSubmitted();
       setTimeout(() => setSubmittedSuccess(false), 6000);
     } catch (err: any) {
-      setErrorMessage(err.message || 'Something went wrong.');
+      setErrorMessage(err?.message || 'Failed to submit question. Please try again.');
     } finally {
       setIsSubmitting(false);
     }

@@ -5,6 +5,13 @@ import { SubmitView } from './components/SubmitView';
 import { PublicFeedView } from './components/PublicFeedView';
 import { ModeratorView } from './components/ModeratorView';
 import { QuestionItem, ActiveView } from './types';
+import {
+  getPublicQuestions,
+  getModeratorQuestions,
+  replyToQuestion,
+  deleteQuestion,
+  verifyPasskey,
+} from './services/questionsService';
 
 export default function App() {
   const [activeView, setActiveView] = useState<ActiveView>('submit');
@@ -21,11 +28,8 @@ export default function App() {
   const fetchPublicQuestions = useCallback(async () => {
     try {
       setIsLoading(true);
-      const res = await fetch('/api/questions');
-      if (res.ok) {
-        const data = await res.json();
-        setPublicQuestions(data);
-      }
+      const data = await getPublicQuestions();
+      setPublicQuestions(data);
     } catch (err) {
       console.error('Failed to load public questions:', err);
     } finally {
@@ -37,11 +41,8 @@ export default function App() {
   const fetchModeratorQuestions = useCallback(async () => {
     try {
       setIsLoading(true);
-      const res = await fetch('/api/moderator/questions');
-      if (res.ok) {
-        const data = await res.json();
-        setAllModeratorQuestions(data);
-      }
+      const data = await getModeratorQuestions();
+      setAllModeratorQuestions(data);
     } catch (err) {
       console.error('Failed to load moderator questions:', err);
     } finally {
@@ -59,25 +60,15 @@ export default function App() {
 
   // Handle secret keyword trigger: "StudentInclusion2026"
   const handleTriggerModerator = async (passkey: string) => {
-    try {
-      const res = await fetch('/api/moderator/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ passkey }),
-      });
-
-      if (res.ok) {
-        setIsModerator(true);
-        localStorage.setItem('si_is_moderator', 'true');
-        setActiveView('moderation');
-        fetchModeratorQuestions();
-        setModeratorBannerNotice('Moderator Mode Activated: Teleported to Reviewer Portal');
-        setTimeout(() => setModeratorBannerNotice(null), 5000);
-      } else {
-        alert('Invalid passkey.');
-      }
-    } catch (err) {
-      console.error(err);
+    if (verifyPasskey(passkey)) {
+      setIsModerator(true);
+      localStorage.setItem('si_is_moderator', 'true');
+      setActiveView('moderation');
+      await fetchModeratorQuestions();
+      setModeratorBannerNotice('Moderator Mode Activated: Teleported to Reviewer Portal');
+      setTimeout(() => setModeratorBannerNotice(null), 5000);
+    } else {
+      alert('Invalid passkey.');
     }
   };
 
@@ -91,29 +82,13 @@ export default function App() {
 
   // Moderator actions
   const handleReplySubmit = async (id: string, reply: string) => {
-    const res = await fetch('/api/moderator/reply', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, reply, repliedBy: 'Student Inclusion Team' }),
-    });
-
-    if (!res.ok) {
-      throw new Error('Failed to submit reply');
-    }
-
+    await replyToQuestion(id, reply, 'Student Inclusion Team');
     await fetchModeratorQuestions();
     await fetchPublicQuestions();
   };
 
   const handleDeleteQuestion = async (id: string) => {
-    const res = await fetch(`/api/moderator/questions/${id}`, {
-      method: 'DELETE',
-    });
-
-    if (!res.ok) {
-      throw new Error('Failed to delete question');
-    }
-
+    await deleteQuestion(id);
     await fetchModeratorQuestions();
     await fetchPublicQuestions();
   };
