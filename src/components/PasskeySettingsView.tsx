@@ -25,12 +25,14 @@ interface PasskeySettingsViewProps {
   onBackToSubmit: () => void;
   onNavigateToModeration: () => void;
   initialAdminAuth?: boolean;
+  onPasskeyUpdated?: (newKey: string) => void;
 }
 
 export function PasskeySettingsView({
   onBackToSubmit,
   onNavigateToModeration,
   initialAdminAuth = false,
+  onPasskeyUpdated,
 }: PasskeySettingsViewProps) {
   // Authentication gate for this page
   const [isAdminAuthenticated, setIsAdminAuthenticated] = useState<boolean>(initialAdminAuth);
@@ -138,8 +140,9 @@ export function PasskeySettingsView({
         setConfirmPasskey('');
         setFeedback({
           type: 'success',
-          message: `Success! The moderator passkey has been securely updated to "${res.updatedPasskey}".`,
+          message: `Success! The new passkey "${res.updatedPasskey}" has been confirmed. The previous passkey is now permanently invalid, and all active moderator sessions across all devices have been logged out automatically.`,
         });
+        onPasskeyUpdated?.(res.updatedPasskey);
       } else {
         setFeedback({
           type: 'error',
@@ -355,7 +358,7 @@ export function PasskeySettingsView({
                   Change Moderator Passkey
                 </h2>
                 <p className="text-stone-600 text-xs mt-1">
-                  Changing the passkey will immediately invalidate previous credentials. Make sure to note down the new passkey.
+                  Once confirmed, only the new passkey can be used. The previous passkey is permanently revoked and all active moderator sessions across all devices are logged out automatically.
                 </p>
               </div>
 
@@ -395,7 +398,7 @@ export function PasskeySettingsView({
                         id="new-passkey-input"
                         value={newPasskey}
                         onChange={(e) => setNewPasskey(e.target.value)}
-                        placeholder="e.g. StudentInclusion2026..."
+                        placeholder="Enter new passkey..."
                         className="w-full px-3.5 py-2.5 pr-10 bg-[#FAF8F5] border-2 border-[#0D1527] text-[#0D1527] font-mono text-sm placeholder:text-stone-400 focus:outline-none focus:border-[#FF5030] transition-colors"
                         required
                       />

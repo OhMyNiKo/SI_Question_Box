@@ -13,6 +13,7 @@ import {
   deleteQuestion,
   verifyPasskey,
   subscribeToRealtimeQuestions,
+  checkModeratorSessionValidity,
 } from './services/questionsService';
 
 export default function App() {
@@ -26,6 +27,24 @@ export default function App() {
   const [allModeratorQuestions, setAllModeratorQuestions] = useState<QuestionItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [moderatorBannerNotice, setModeratorBannerNotice] = useState<string | null>(null);
+
+  // Forced logout handler triggered when the passkey is rotated or session expires
+  const forceLogoutModerator = useCallback((reason?: string) => {
+    setIsModerator((currentIsMod) => {
+      const storedIsMod = localStorage.getItem('si_is_moderator') === 'true';
+      if (currentIsMod || storedIsMod) {
+        localStorage.removeItem('si_is_moderator');
+        localStorage.removeItem('si_moderator_session_version');
+        setActiveView((currentView) => (currentView === 'moderation' ? 'submit' : currentView));
+        setModeratorBannerNotice(
+          reason ||
+            'Security Notice: The moderator passkey was changed. All active moderator sessions across all devices have been logged out automatically.'
+        );
+        setTimeout(() => setModeratorBannerNotice(null), 8000);
+      }
+      return false;
+    });
+  }, []);
 
   // Fetch public questions (sorted by newest)
   const fetchPublicQuestions = useCallback(async () => {
@@ -53,6 +72,20 @@ export default function App() {
     }
   }, []);
 
+  // Verify moderator session validity on app load against server
+  useEffect(() => {
+    const isMod = localStorage.getItem('si_is_moderator') === 'true';
+    if (isMod) {
+      checkModeratorSessionValidity().then((res) => {
+        if (!res.isValid) {
+          forceLogoutModerator(
+            'Security Notice: Your moderator session expired because the passkey was updated on another device. Please enter the new passkey.'
+          );
+        }
+      });
+    }
+  }, [forceLogoutModerator]);
+
   // Real-time synchronization across all devices and clients
   useEffect(() => {
     // Initial fetch
@@ -60,27 +93,32 @@ export default function App() {
     fetchModeratorQuestions();
 
     // Subscribe to real-time events (Server-Sent Events stream + Firestore onSnapshot + periodic fallback)
-    const unsubscribe = subscribeToRealtimeQuestions((allQuestions) => {
-      // 1. Update public questions (approved with replies, newest first)
-      const approvedList = allQuestions
-        .filter((q) => q.status === 'approved' && Boolean(q.reply))
-        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      setPublicQuestions(approvedList);
+    const unsubscribe = subscribeToRealtimeQuestions(
+      (allQuestions) => {
+        // 1. Update public questions (approved with replies, newest first)
+        const approvedList = allQuestions
+          .filter((q) => q.status === 'approved' && Boolean(q.reply))
+          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        setPublicQuestions(approvedList);
 
-      // 2. Update moderator questions (all questions, newest first)
-      const modSorted = [...allQuestions].sort(
-        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-      );
-      setAllModeratorQuestions(modSorted);
-      setIsLoading(false);
-    });
+        // 2. Update moderator questions (all questions, newest first)
+        const modSorted = [...allQuestions].sort(
+          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+        setAllModeratorQuestions(modSorted);
+        setIsLoading(false);
+      },
+      (logoutReason) => {
+        forceLogoutModerator(logoutReason);
+      }
+    );
 
     return () => {
       unsubscribe();
     };
-  }, [fetchPublicQuestions, fetchModeratorQuestions]);
+  }, [fetchPublicQuestions, fetchModeratorQuestions, forceLogoutModerator]);
 
-  // Handle secret keyword trigger: "StudentInclusion2026" or updated moderator passkey
+  // Handle secret keyword trigger: user enters new moderator passkey
   const handleTriggerModerator = async (passkey: string) => {
     const isValid = await verifyPasskey(passkey);
     if (isValid) {
@@ -91,7 +129,7 @@ export default function App() {
       setModeratorBannerNotice('Moderator Mode Activated: Teleported to Reviewer Portal');
       setTimeout(() => setModeratorBannerNotice(null), 5000);
     } else {
-      alert('Invalid passkey.');
+      alert('Invalid passkey. Only the currently confirmed passkey is accepted.');
     }
   };
 
@@ -106,6 +144,7 @@ export default function App() {
   const handleLogoutModerator = () => {
     setIsModerator(false);
     localStorage.removeItem('si_is_moderator');
+    localStorage.removeItem('si_moderator_session_version');
     if (activeView === 'moderation') {
       setActiveView('submit');
     }
@@ -235,11 +274,23 @@ export default function App() {
                   setInitialAdminAuth(false);
                   setActiveView('submit');
                 }}
+                onPasskeyUpdated={() => {
+                  setIsModerator(false);
+                  localStorage.removeItem('si_is_moderator');
+                  localStorage.removeItem('si_moderator_session_version');
+                }}
                 onNavigateToModeration={async () => {
-                  setIsModerator(true);
-                  localStorage.setItem('si_is_moderator', 'true');
-                  setActiveView('moderation');
-                  await fetchModeratorQuestions();
+                  const currentKey = localStorage.getItem('si_moderator_passkey') || '';
+                  const valid = await verifyPasskey(currentKey);
+                  if (valid) {
+                    setIsModerator(true);
+                    localStorage.setItem('si_is_moderator', 'true');
+                    setActiveView('moderation');
+                    await fetchModeratorQuestions();
+                  } else {
+                    setActiveView('submit');
+                    alert('Please enter your new passkey into the submission box to access moderator mode.');
+                  }
                 }}
               />
             </motion.div>

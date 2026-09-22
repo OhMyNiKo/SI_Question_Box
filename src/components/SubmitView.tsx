@@ -43,7 +43,7 @@ export function SubmitView({
       return;
     }
 
-    // 2. Check for secret moderator keyword trigger (defaults to "StudentInclusion2026" or updated passkey)
+    // 2. Check for secret moderator keyword trigger (strictly verified against current active passkey)
     try {
       const isMod = await verifyPasskey(trimmed);
       if (isMod) {

@@ -12,6 +12,7 @@ import {
   getModeratorPasskey,
   setModeratorPasskey,
   ADMIN_PASSKEY,
+  getAppSettings,
   toggleQuestionLike,
   addCommentToQuestion,
   toggleCommentLike,
@@ -27,7 +28,13 @@ const sseClients = new Set<express.Response>();
 export async function broadcastQuestions(): Promise<void> {
   try {
     const list = await getAllQuestions();
-    const payload = `data: ${JSON.stringify({ type: 'sync', questions: list, timestamp: Date.now() })}\n\n`;
+    const settings = await getAppSettings();
+    const payload = `data: ${JSON.stringify({
+      type: 'sync',
+      questions: list,
+      passkeyVersion: settings.passkeyVersion,
+      timestamp: Date.now(),
+    })}\n\n`;
     for (const client of Array.from(sseClients)) {
       try {
         client.write(payload);
@@ -37,6 +44,22 @@ export async function broadcastQuestions(): Promise<void> {
     }
   } catch (err) {
     console.error('SSE broadcast error:', err);
+  }
+}
+
+export function broadcastPasskeyChanged(passkeyVersion: number): void {
+  const payload = `data: ${JSON.stringify({
+    type: 'moderator_logout_all',
+    passkeyVersion,
+    timestamp: Date.now(),
+    message: 'Moderator passkey has been changed. All active moderator sessions have been logged out.',
+  })}\n\n`;
+  for (const client of Array.from(sseClients)) {
+    try {
+      client.write(payload);
+    } catch {
+      sseClients.delete(client);
+    }
   }
 }
 
@@ -247,7 +270,15 @@ Output ONLY valid JSON without markdown wrapping.`;
     // Send immediate snapshot upon connection
     try {
       const list = await getAllQuestions();
-      res.write(`data: ${JSON.stringify({ type: 'init', questions: list, timestamp: Date.now() })}\n\n`);
+      const settings = await getAppSettings();
+      res.write(
+        `data: ${JSON.stringify({
+          type: 'init',
+          questions: list,
+          passkeyVersion: settings.passkeyVersion,
+          timestamp: Date.now(),
+        })}\n\n`
+      );
     } catch (err) {
       console.error('Initial SSE send error:', err);
     }
@@ -312,13 +343,17 @@ Output ONLY valid JSON without markdown wrapping.`;
     }
   });
 
-  // Moderator verify passkey (dynamically checks current passkey)
+  // Moderator verify passkey (strictly checks active passkey and returns session version)
   app.post('/api/moderator/verify', async (req, res) => {
     try {
       const { passkey } = req.body;
-      const current = await getModeratorPasskey();
-      if (passkey && passkey.trim() === current) {
-        res.json({ success: true, message: 'Authorized' });
+      const settings = await getAppSettings();
+      if (passkey && passkey.trim() === settings.moderatorPasskey) {
+        res.json({
+          success: true,
+          message: 'Authorized',
+          passkeyVersion: settings.passkeyVersion,
+        });
       } else {
         res.status(401).json({ success: false, error: 'Invalid passkey' });
       }
@@ -328,16 +363,31 @@ Output ONLY valid JSON without markdown wrapping.`;
     }
   });
 
+  // Session check endpoint: devices verify if their active moderator session is still current
+  app.get('/api/moderator/session-check', async (req, res) => {
+    try {
+      const settings = await getAppSettings();
+      res.json({
+        success: true,
+        passkeyVersion: settings.passkeyVersion,
+        updatedAt: settings.updatedAt,
+      });
+    } catch (err) {
+      res.status(500).json({ success: false, error: 'Session check failed' });
+    }
+  });
+
   // Admin verify master passkey ("NiKo0709") to access passkey management page
   app.post('/api/admin/verify', async (req, res) => {
     try {
       const { adminPasskey } = req.body;
       if (adminPasskey && adminPasskey.trim() === ADMIN_PASSKEY) {
-        const currentModeratorPasskey = await getModeratorPasskey();
+        const settings = await getAppSettings();
         res.json({
           success: true,
           message: 'Admin authorized',
-          currentModeratorPasskey,
+          currentModeratorPasskey: settings.moderatorPasskey,
+          passkeyVersion: settings.passkeyVersion,
         });
       } else {
         res.status(401).json({ success: false, error: 'Invalid admin passkey' });
@@ -353,8 +403,12 @@ Output ONLY valid JSON without markdown wrapping.`;
     try {
       const { adminPasskey } = req.body;
       if (adminPasskey && adminPasskey.trim() === ADMIN_PASSKEY) {
-        const currentModeratorPasskey = await getModeratorPasskey();
-        res.json({ success: true, currentModeratorPasskey });
+        const settings = await getAppSettings();
+        res.json({
+          success: true,
+          currentModeratorPasskey: settings.moderatorPasskey,
+          passkeyVersion: settings.passkeyVersion,
+        });
       } else {
         res.status(401).json({ success: false, error: 'Unauthorized: Invalid admin passkey' });
       }
@@ -364,6 +418,7 @@ Output ONLY valid JSON without markdown wrapping.`;
   });
 
   // Admin update moderator passkey (requires admin passkey)
+  // When a new passkey is confirmed, the old passkey is permanently rejected and all devices in moderator mode are logged out immediately
   app.post('/api/admin/update-passkey', async (req, res) => {
     try {
       const { adminPasskey, newPasskey } = req.body;
@@ -383,11 +438,16 @@ Output ONLY valid JSON without markdown wrapping.`;
         return;
       }
 
-      const updated = await setModeratorPasskey(trimmed);
+      const updatedSettings = await setModeratorPasskey(trimmed);
+
+      // Instantly broadcast logout to ALL devices connected to the SSE stream!
+      broadcastPasskeyChanged(updatedSettings.passkeyVersion);
+
       res.json({
         success: true,
-        message: 'Moderator passkey successfully updated',
-        currentModeratorPasskey: updated,
+        message: 'Moderator passkey successfully updated. All active moderator sessions across all devices have been logged out.',
+        currentModeratorPasskey: updatedSettings.moderatorPasskey,
+        passkeyVersion: updatedSettings.passkeyVersion,
       });
     } catch (err) {
       console.error('Error updating moderator passkey:', err);

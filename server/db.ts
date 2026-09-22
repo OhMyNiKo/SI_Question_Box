@@ -279,6 +279,7 @@ const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 export interface AppSettings {
   moderatorPasskey: string;
   updatedAt: string;
+  passkeyVersion: number;
 }
 
 function loadLocalSettings(): AppSettings {
@@ -290,7 +291,11 @@ function loadLocalSettings(): AppSettings {
       const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
       const data = JSON.parse(raw);
       if (data && typeof data.moderatorPasskey === 'string' && data.moderatorPasskey.trim()) {
-        return data;
+        return {
+          moderatorPasskey: data.moderatorPasskey.trim(),
+          updatedAt: data.updatedAt || new Date().toISOString(),
+          passkeyVersion: typeof data.passkeyVersion === 'number' ? data.passkeyVersion : 1,
+        };
       }
     }
   } catch (err) {
@@ -299,6 +304,7 @@ function loadLocalSettings(): AppSettings {
   return {
     moderatorPasskey: DEFAULT_MODERATOR_PASSKEY,
     updatedAt: new Date().toISOString(),
+    passkeyVersion: 1,
   };
 }
 
@@ -313,7 +319,7 @@ function saveLocalSettings(settings: AppSettings): void {
   }
 }
 
-export async function getModeratorPasskey(): Promise<string> {
+export async function getAppSettings(): Promise<AppSettings> {
   const db = getDb();
   if (db) {
     // 1. Primary: read from questions/_settings_security (covered by /questions/{id} rule)
@@ -322,7 +328,11 @@ export async function getModeratorPasskey(): Promise<string> {
       if (snap.exists()) {
         const data = snap.data();
         if (data && typeof data.moderatorPasskey === 'string' && data.moderatorPasskey.trim()) {
-          return data.moderatorPasskey.trim();
+          return {
+            moderatorPasskey: data.moderatorPasskey.trim(),
+            updatedAt: data.updatedAt || new Date().toISOString(),
+            passkeyVersion: typeof data.passkeyVersion === 'number' ? data.passkeyVersion : 1,
+          };
         }
       }
     } catch {
@@ -335,22 +345,34 @@ export async function getModeratorPasskey(): Promise<string> {
       if (docSnap.exists()) {
         const data = docSnap.data();
         if (data && typeof data.moderatorPasskey === 'string' && data.moderatorPasskey.trim()) {
-          return data.moderatorPasskey.trim();
+          return {
+            moderatorPasskey: data.moderatorPasskey.trim(),
+            updatedAt: data.updatedAt || new Date().toISOString(),
+            passkeyVersion: typeof data.passkeyVersion === 'number' ? data.passkeyVersion : 1,
+          };
         }
       }
     } catch {
       // ignore
     }
   }
-  const local = loadLocalSettings();
-  return local.moderatorPasskey;
+  return loadLocalSettings();
 }
 
-export async function setModeratorPasskey(newPasskey: string): Promise<string> {
+export async function getModeratorPasskey(): Promise<string> {
+  const settings = await getAppSettings();
+  return settings.moderatorPasskey;
+}
+
+export async function setModeratorPasskey(newPasskey: string): Promise<AppSettings> {
   const trimmed = newPasskey.trim();
+  const current = await getAppSettings();
+  const nextVersion = (current.passkeyVersion || 1) + 1;
+
   const settings: AppSettings = {
     moderatorPasskey: trimmed,
     updatedAt: new Date().toISOString(),
+    passkeyVersion: nextVersion,
   };
 
   const db = getDb();
@@ -371,5 +393,5 @@ export async function setModeratorPasskey(newPasskey: string): Promise<string> {
   }
 
   saveLocalSettings(settings);
-  return trimmed;
+  return settings;
 }

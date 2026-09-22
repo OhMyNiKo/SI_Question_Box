@@ -482,16 +482,51 @@ export async function verifyPasskey(passkey: string): Promise<boolean> {
       const data = await res.json();
       if (data.success) {
         setLocalModeratorPasskey(trimmed);
+        if (data.passkeyVersion) {
+          localStorage.setItem('si_moderator_session_version', String(data.passkeyVersion));
+        }
         return true;
+      }
+    } else {
+      // Server explicitly rejected the passkey (HTTP 401 or other error)
+      // Never fall back to accepting old or default passkeys!
+      return false;
+    }
+  } catch (err) {
+    console.warn('Server verifyPasskey network error:', err);
+  }
+
+  // 2. Only in genuine network connection failure, verify strictly against locally cached active passkey
+  const localCurrent = getLocalModeratorPasskey();
+  return trimmed === localCurrent;
+}
+
+export async function checkModeratorSessionValidity(): Promise<{
+  isValid: boolean;
+  serverPasskeyVersion?: number;
+}> {
+  try {
+    const res = await fetch('/api/moderator/session-check');
+    if (res.ok) {
+      const data = await res.json();
+      if (data && typeof data.passkeyVersion === 'number') {
+        const storedVersion = localStorage.getItem('si_moderator_session_version');
+        const isMod = localStorage.getItem('si_is_moderator') === 'true';
+        if (isMod) {
+          if (!storedVersion || storedVersion !== String(data.passkeyVersion)) {
+            // Out of sync! Session is invalid
+            localStorage.removeItem('si_is_moderator');
+            localStorage.removeItem('si_moderator_session_version');
+            return { isValid: false, serverPasskeyVersion: data.passkeyVersion };
+          }
+        }
+        return { isValid: true, serverPasskeyVersion: data.passkeyVersion };
       }
     }
   } catch (err) {
-    console.warn('Server verifyPasskey fallback to local:', err);
+    console.warn('Session check note:', err);
   }
-
-  // 2. Fallback to local stored passkey
-  const localCurrent = getLocalModeratorPasskey();
-  return trimmed === localCurrent || trimmed === DEFAULT_MODERATOR_PASSKEY;
+  return { isValid: true };
 }
 
 export async function verifyAdminPasskey(adminPasskey: string): Promise<{ success: boolean; currentPasskey: string }> {
@@ -547,7 +582,7 @@ export async function fetchCurrentModeratorPasskey(adminPasskey: string): Promis
 export async function updateModeratorPasskey(
   adminPasskey: string,
   newPasskey: string
-): Promise<{ success: boolean; updatedPasskey: string; error?: string }> {
+): Promise<{ success: boolean; updatedPasskey: string; passkeyVersion?: number; error?: string }> {
   const trimmedAdmin = adminPasskey.trim();
   const trimmedNew = newPasskey.trim();
 
@@ -568,13 +603,22 @@ export async function updateModeratorPasskey(
     const data = await res.json();
     if (res.ok && data.success) {
       setLocalModeratorPasskey(data.currentModeratorPasskey || trimmedNew);
-      return { success: true, updatedPasskey: data.currentModeratorPasskey || trimmedNew };
+      // Immediately invalidate any active moderator session on this device
+      localStorage.removeItem('si_is_moderator');
+      localStorage.removeItem('si_moderator_session_version');
+      return {
+        success: true,
+        updatedPasskey: data.currentModeratorPasskey || trimmedNew,
+        passkeyVersion: data.passkeyVersion,
+      };
     } else {
       return { success: false, updatedPasskey: '', error: data.error || 'Server failed to update passkey' };
     }
   } catch (err) {
     console.warn('Server update error, updating local storage:', err);
     setLocalModeratorPasskey(trimmedNew);
+    localStorage.removeItem('si_is_moderator');
+    localStorage.removeItem('si_moderator_session_version');
     return { success: true, updatedPasskey: trimmedNew };
   }
 }
@@ -773,7 +817,8 @@ export async function toggleCommentLike(
  * 3. Keeps a resilient 4-second polling timer fallback in case mobile browsers sleep or drop SSE
  */
 export function subscribeToRealtimeQuestions(
-  callback: (questions: QuestionItem[]) => void
+  callback: (questions: QuestionItem[]) => void,
+  onModeratorLogout?: (reason: string) => void
 ): () => void {
   let isClosed = false;
 
@@ -787,7 +832,28 @@ export function subscribeToRealtimeQuestions(
       eventSource.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data);
-          if (payload && Array.isArray(payload.questions) && payload.questions.length > 0) {
+          if (!payload) return;
+
+          // Check if server broadcasted a global moderator logout
+          if (payload.type === 'moderator_logout_all' || payload.type === 'passkey_changed') {
+            onModeratorLogout?.(
+              payload.message ||
+                'The moderator passkey was changed. All active moderator sessions have been logged out.'
+            );
+          }
+
+          // Check passkeyVersion discrepancy against active session
+          if (typeof payload.passkeyVersion === 'number') {
+            const storedVersion = localStorage.getItem('si_moderator_session_version');
+            const isMod = localStorage.getItem('si_is_moderator') === 'true';
+            if (isMod && storedVersion && storedVersion !== String(payload.passkeyVersion)) {
+              onModeratorLogout?.(
+                'Your session has expired because the moderator passkey was changed.'
+              );
+            }
+          }
+
+          if (Array.isArray(payload.questions) && payload.questions.length > 0) {
             const cleanList: QuestionItem[] = payload.questions.filter(
               (q: any) => q && !q.id?.startsWith('_')
             );
@@ -846,6 +912,27 @@ export function subscribeToRealtimeQuestions(
   const pollInterval = setInterval(async () => {
     if (isClosed) return;
     try {
+      // Periodic session check to detect passkey changes on sleepy devices
+      const isMod = localStorage.getItem('si_is_moderator') === 'true';
+      if (isMod) {
+        try {
+          const sessionRes = await fetch('/api/moderator/session-check');
+          if (sessionRes.ok) {
+            const sessionData = await sessionRes.json();
+            if (sessionData && typeof sessionData.passkeyVersion === 'number') {
+              const storedVersion = localStorage.getItem('si_moderator_session_version');
+              if (storedVersion && storedVersion !== String(sessionData.passkeyVersion)) {
+                onModeratorLogout?.(
+                  'Your session expired because the moderator passkey was changed.'
+                );
+              }
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+
       const res = await fetch('/api/questions?scope=all');
       if (res.ok) {
         const data = await res.json();
