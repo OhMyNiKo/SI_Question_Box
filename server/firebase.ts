@@ -7,7 +7,14 @@ import {
   setDoc,
   deleteDoc,
   Firestore,
+  setLogLevel,
 } from 'firebase/firestore';
+
+try {
+  setLogLevel('error');
+} catch {
+  // ignore
+}
 
 export interface FirebaseConfig {
   apiKey?: string;

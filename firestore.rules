@@ -5,5 +5,9 @@ service cloud.firestore {
     match /questions/{questionId} {
       allow read, write: if true;
     }
+    // Allows read and write for app settings and security configurations
+    match /settings/{settingId} {
+      allow read, write: if true;
+    }
   }
 }

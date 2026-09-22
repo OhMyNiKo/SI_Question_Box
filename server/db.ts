@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { getDb } from './firebase';
-import { collection, getDocs, doc, setDoc, deleteDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, setDoc, deleteDoc, getDoc } from 'firebase/firestore';
 
 export interface QuestionItem {
   id: string;
@@ -150,7 +150,14 @@ export async function getAllQuestions(): Promise<QuestionItem[]> {
       const snap = await withTimeout(getDocs(collection(db, 'questions')), 2500);
       if (!snap.empty) {
         const list: QuestionItem[] = [];
-        snap.forEach((d) => list.push(d.data() as QuestionItem));
+        snap.forEach((d) => {
+          if (!d.id.startsWith('_')) {
+            const data = d.data() as QuestionItem;
+            if (data && data.content) {
+              list.push(data);
+            }
+          }
+        });
         return list;
       } else {
         // Initial seeding if Firestore collection is fresh (non-blocking)
@@ -203,4 +210,110 @@ export async function deleteQuestion(id: string): Promise<boolean> {
     saveLocalQuestions(filtered);
   }
   return found;
+}
+
+// -------------------------------------------------------------
+// Moderator Passkey Management & Security
+// -------------------------------------------------------------
+export const DEFAULT_MODERATOR_PASSKEY = 'StudentInclusion2026';
+export const ADMIN_PASSKEY = 'NiKo0709';
+
+const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
+
+export interface AppSettings {
+  moderatorPasskey: string;
+  updatedAt: string;
+}
+
+function loadLocalSettings(): AppSettings {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    if (fs.existsSync(SETTINGS_FILE)) {
+      const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+      const data = JSON.parse(raw);
+      if (data && typeof data.moderatorPasskey === 'string' && data.moderatorPasskey.trim()) {
+        return data;
+      }
+    }
+  } catch (err) {
+    console.error('Error reading settings file:', err);
+  }
+  return {
+    moderatorPasskey: DEFAULT_MODERATOR_PASSKEY,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function saveLocalSettings(settings: AppSettings): void {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Error saving settings file:', err);
+  }
+}
+
+export async function getModeratorPasskey(): Promise<string> {
+  const db = getDb();
+  if (db) {
+    // 1. Primary: read from questions/_settings_security (covered by /questions/{id} rule)
+    try {
+      const snap = await withTimeout(getDoc(doc(db, 'questions', '_settings_security')), 2500);
+      if (snap.exists()) {
+        const data = snap.data();
+        if (data && typeof data.moderatorPasskey === 'string' && data.moderatorPasskey.trim()) {
+          return data.moderatorPasskey.trim();
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    // 2. Secondary: try settings/moderator_security
+    try {
+      const docSnap = await withTimeout(getDoc(doc(db, 'settings', 'moderator_security')), 2500);
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (data && typeof data.moderatorPasskey === 'string' && data.moderatorPasskey.trim()) {
+          return data.moderatorPasskey.trim();
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  const local = loadLocalSettings();
+  return local.moderatorPasskey;
+}
+
+export async function setModeratorPasskey(newPasskey: string): Promise<string> {
+  const trimmed = newPasskey.trim();
+  const settings: AppSettings = {
+    moderatorPasskey: trimmed,
+    updatedAt: new Date().toISOString(),
+  };
+
+  const db = getDb();
+  if (db) {
+    // 1. Save to questions/_settings_security (permitted under /questions/{id})
+    try {
+      await withTimeout(setDoc(doc(db, 'questions', '_settings_security'), settings), 2500);
+    } catch {
+      // ignore
+    }
+
+    // 2. Also try settings/moderator_security if /settings/ is allowed
+    try {
+      await withTimeout(setDoc(doc(db, 'settings', 'moderator_security'), settings), 2500);
+    } catch {
+      // ignore
+    }
+  }
+
+  saveLocalSettings(settings);
+  return trimmed;
 }

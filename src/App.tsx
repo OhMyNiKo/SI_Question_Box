@@ -4,6 +4,7 @@ import { Header } from './components/Header';
 import { SubmitView } from './components/SubmitView';
 import { PublicFeedView } from './components/PublicFeedView';
 import { ModeratorView } from './components/ModeratorView';
+import { PasskeySettingsView } from './components/PasskeySettingsView';
 import { QuestionItem, ActiveView } from './types';
 import {
   getPublicQuestions,
@@ -18,6 +19,7 @@ export default function App() {
   const [isModerator, setIsModerator] = useState<boolean>(() => {
     return localStorage.getItem('si_is_moderator') === 'true';
   });
+  const [initialAdminAuth, setInitialAdminAuth] = useState(false);
 
   const [publicQuestions, setPublicQuestions] = useState<QuestionItem[]>([]);
   const [allModeratorQuestions, setAllModeratorQuestions] = useState<QuestionItem[]>([]);
@@ -58,9 +60,10 @@ export default function App() {
     }
   }, [fetchPublicQuestions, fetchModeratorQuestions, isModerator]);
 
-  // Handle secret keyword trigger: "StudentInclusion2026"
+  // Handle secret keyword trigger: "StudentInclusion2026" or updated moderator passkey
   const handleTriggerModerator = async (passkey: string) => {
-    if (verifyPasskey(passkey)) {
+    const isValid = await verifyPasskey(passkey);
+    if (isValid) {
       setIsModerator(true);
       localStorage.setItem('si_is_moderator', 'true');
       setActiveView('moderation');
@@ -70,6 +73,14 @@ export default function App() {
     } else {
       alert('Invalid passkey.');
     }
+  };
+
+  // Handle secret keyword trigger: "NiKo0709" to open Passkey Settings Page
+  const handleTriggerAdminPasskey = () => {
+    setInitialAdminAuth(true);
+    setActiveView('passkey_settings');
+    setModeratorBannerNotice('Master Security Console Activated: Authenticated with NiKo0709');
+    setTimeout(() => setModeratorBannerNotice(null), 5000);
   };
 
   const handleLogoutModerator = () => {
@@ -93,6 +104,12 @@ export default function App() {
     await fetchPublicQuestions();
   };
 
+  const handleQuestionUpdated = (updated: QuestionItem) => {
+    setPublicQuestions((prev) =>
+      prev.map((q) => (q.id === updated.id ? updated : q))
+    );
+  };
+
   return (
     <div className="min-h-screen bg-grid-pattern text-[#0D1527] flex flex-col justify-between font-sans selection:bg-[#0D1527] selection:text-white relative overflow-x-hidden">
       {/* Header */}
@@ -105,11 +122,19 @@ export default function App() {
       />
 
       {/* Moderator Notification Toast */}
-      {moderatorBannerNotice && (
-        <div className="bg-[#0D1527] text-white text-xs font-bold text-center py-2.5 px-4 shadow-sm z-30">
-          {moderatorBannerNotice}
-        </div>
-      )}
+      <AnimatePresence>
+        {moderatorBannerNotice && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden bg-[#0D1527] text-white text-xs font-bold text-center py-2.5 px-4 shadow-sm z-30"
+          >
+            {moderatorBannerNotice}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Main Content with Animated Transitions */}
       <main className="flex-1 flex flex-col justify-center min-h-0 relative">
@@ -129,6 +154,7 @@ export default function App() {
                   if (isModerator) fetchModeratorQuestions();
                 }}
                 onTriggerModerator={handleTriggerModerator}
+                onTriggerAdminPasskey={handleTriggerAdminPasskey}
                 onNavigateToFeed={() => setActiveView('public_feed')}
                 publicCount={publicQuestions.length}
               />
@@ -149,6 +175,7 @@ export default function App() {
                 isLoading={isLoading}
                 onRefresh={fetchPublicQuestions}
                 onBackToSubmit={() => setActiveView('submit')}
+                onQuestionUpdated={handleQuestionUpdated}
               />
             </motion.div>
           )}
@@ -172,11 +199,35 @@ export default function App() {
               />
             </motion.div>
           )}
+
+          {activeView === 'passkey_settings' && (
+            <motion.div
+              key="passkey-settings-view"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.22, ease: 'easeInOut' }}
+              className="flex-1 flex flex-col justify-center"
+            >
+              <PasskeySettingsView
+                initialAdminAuth={initialAdminAuth}
+                onBackToSubmit={() => {
+                  setInitialAdminAuth(false);
+                  setActiveView('submit');
+                }}
+                onNavigateToModeration={async () => {
+                  setIsModerator(true);
+                  localStorage.setItem('si_is_moderator', 'true');
+                  setActiveView('moderation');
+                  await fetchModeratorQuestions();
+                }}
+              />
+            </motion.div>
+          )}
         </AnimatePresence>
       </main>
 
-      {/* Footer strictly matching reference picture:
-          STUDENT INCLUSION · 2026 on left, YOUR VOICE BELONGS HERE. on right */}
+      {/* Footer */}
       <footer className="w-full max-w-7xl mx-auto px-4 sm:px-8 lg:px-12 py-3 sm:py-4 lg:py-6 text-[10px] sm:text-xs lg:text-sm font-black tracking-[0.18em] lg:tracking-[0.22em] text-stone-400 uppercase flex items-center justify-between z-20 shrink-0">
         <span>Student Inclusion · 2026</span>
         <span>Your voice belongs here.</span>

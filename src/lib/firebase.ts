@@ -1,5 +1,11 @@
 import { initializeApp, getApps } from 'firebase/app';
-import { getFirestore, Firestore } from 'firebase/firestore';
+import { getFirestore, Firestore, setLogLevel } from 'firebase/firestore';
+
+try {
+  setLogLevel('error');
+} catch {
+  // ignore
+}
 
 export const firebaseConfig = {
   apiKey: "AIzaSyBkB29DWCvLthsekVDUv_B2Bogp7zzBKAw",

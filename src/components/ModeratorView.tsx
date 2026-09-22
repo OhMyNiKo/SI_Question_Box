@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import {
   ShieldAlert,
   X,
@@ -13,6 +14,10 @@ import {
   Rows,
 } from 'lucide-react';
 import { QuestionItem } from '../types';
+import {
+  smartSearchQuestions,
+  filterAndRankQuestions,
+} from '../services/questionsService';
 
 interface ModeratorViewProps {
   questions: QuestionItem[];
@@ -44,6 +49,32 @@ export function ModeratorView({
 
   // Search filter
   const [searchQuery, setSearchQuery] = useState('');
+  const [aiMatchedIds, setAiMatchedIds] = useState<string[] | null>(null);
+
+  // Debounced AI smart search
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setAiMatchedIds(null);
+      return;
+    }
+
+    let active = true;
+    const timer = setTimeout(async () => {
+      try {
+        const ids = await smartSearchQuestions(searchQuery, questions);
+        if (active) {
+          setAiMatchedIds(ids);
+        }
+      } catch (err) {
+        console.warn('Moderator smart search error:', err);
+      }
+    }, 320);
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [searchQuery, questions]);
 
   // Layout mode: split (two columns, one at left and one at right) vs single column
   const [isSplitLayout, setIsSplitLayout] = useState(false);
@@ -91,30 +122,46 @@ export function ModeratorView({
 
   // Sort submissions: LATEST TO OLDEST, from top to bottom
   const sortedAndFilteredQuestions = useMemo(() => {
-    const sorted = [...questions].sort((a, b) => {
-      const timeA = new Date(a.createdAt).getTime();
-      const timeB = new Date(b.createdAt).getTime();
-      return timeB - timeA; // Latest first (newest at top, oldest at bottom)
-    });
-
-    const term = searchQuery.trim().toLowerCase();
-
-    return sorted.filter((q) => {
-      // Status tab filter
+    // Status tab filter first
+    const statusFiltered = questions.filter((q) => {
       if (statusFilter === 'pending' && q.status !== 'pending') return false;
       if (statusFilter === 'approved' && q.status !== 'approved') return false;
-
-      // Search query filter
-      if (term) {
-        const matchesContent = q.content.toLowerCase().includes(term);
-        const matchesReply = q.reply ? q.reply.toLowerCase().includes(term) : false;
-        const matchesDate = q.createdAtFormatted ? q.createdAtFormatted.toLowerCase().includes(term) : false;
-        return matchesContent || matchesReply || matchesDate;
-      }
-
       return true;
     });
-  }, [questions, statusFilter, searchQuery]);
+
+    const term = searchQuery.trim();
+    if (!term) {
+      return [...statusFiltered].sort((a, b) => {
+        const timeA = new Date(a.createdAt).getTime();
+        const timeB = new Date(b.createdAt).getTime();
+        return timeB - timeA;
+      });
+    }
+
+    // Direct phrase and multi-word matches for instant feedback
+    const localRanked = filterAndRankQuestions(statusFiltered, term);
+
+    // If AI semantic search returned results, rank them at the top
+    if (aiMatchedIds !== null) {
+      const aiSet = new Set(aiMatchedIds);
+      const ordered: QuestionItem[] = [];
+
+      for (const id of aiMatchedIds) {
+        const item = statusFiltered.find((q) => q.id === id);
+        if (item) ordered.push(item);
+      }
+
+      for (const q of localRanked) {
+        if (!aiSet.has(q.id)) {
+          ordered.push(q);
+        }
+      }
+
+      return ordered;
+    }
+
+    return localRanked;
+  }, [questions, statusFilter, searchQuery, aiMatchedIds]);
 
   const pendingCount = questions.filter((q) => q.status === 'pending').length;
   const approvedCount = questions.filter((q) => q.status === 'approved').length;
@@ -216,7 +263,9 @@ export function ModeratorView({
 
         {/* Status Filter Tabs */}
         <div className="flex items-center gap-1.5 shrink-0 overflow-x-auto pb-1 md:pb-0">
-          <button
+          <motion.button
+            whileTap={{ scale: 0.94 }}
+            whileHover={{ scale: 1.02 }}
             onClick={() => setStatusFilter('all')}
             className={`px-3.5 py-1.5 rounded-full text-xs font-black transition-all cursor-pointer whitespace-nowrap ${
               statusFilter === 'all'
@@ -225,8 +274,10 @@ export function ModeratorView({
             }`}
           >
             All Submissions ({questions.length})
-          </button>
-          <button
+          </motion.button>
+          <motion.button
+            whileTap={{ scale: 0.94 }}
+            whileHover={{ scale: 1.02 }}
             onClick={() => setStatusFilter('pending')}
             className={`px-3.5 py-1.5 rounded-full text-xs font-black transition-all cursor-pointer whitespace-nowrap ${
               statusFilter === 'pending'
@@ -235,8 +286,10 @@ export function ModeratorView({
             }`}
           >
             Pending ({pendingCount})
-          </button>
-          <button
+          </motion.button>
+          <motion.button
+            whileTap={{ scale: 0.94 }}
+            whileHover={{ scale: 1.02 }}
             onClick={() => setStatusFilter('approved')}
             className={`px-3.5 py-1.5 rounded-full text-xs font-black transition-all cursor-pointer whitespace-nowrap ${
               statusFilter === 'approved'
@@ -245,7 +298,7 @@ export function ModeratorView({
             }`}
           >
             Answered ({approvedCount})
-          </button>
+          </motion.button>
         </div>
       </div>
 
@@ -287,17 +340,23 @@ export function ModeratorView({
               : 'space-y-5'
           }
         >
-          {sortedAndFilteredQuestions.map((q, index) => {
-            const currentDraft = drafts[q.id] !== undefined ? drafts[q.id] : q.reply || '';
-            const isSubmitting = submittingIds[q.id] || false;
-            const successMsg = successNotices[q.id];
+          <AnimatePresence>
+            {sortedAndFilteredQuestions.map((q, index) => {
+              const currentDraft = drafts[q.id] !== undefined ? drafts[q.id] : q.reply || '';
+              const isSubmitting = submittingIds[q.id] || false;
+              const successMsg = successNotices[q.id];
 
-            return (
-              <div
-                key={q.id}
-                id={`moderator-card-${q.id}`}
-                className="bg-white rounded-[26px] border-2 border-[#0D1527] shadow-[4px_4px_0px_#0D1527] overflow-hidden transition-all flex flex-col justify-between"
-              >
+              return (
+                <motion.div
+                  layout
+                  initial={{ opacity: 0, y: 15 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95 }}
+                  transition={{ duration: 0.2 }}
+                  key={q.id}
+                  id={`moderator-card-${q.id}`}
+                  className="bg-white rounded-[26px] border-2 border-[#0D1527] shadow-[4px_4px_0px_#0D1527] overflow-hidden transition-shadow flex flex-col justify-between"
+                >
                 {/* Header: Sequence Number, Timestamp, Status & Delete 'X' Button */}
                 <div className="px-4 sm:px-5 py-3 bg-[#F8F6F0] border-b-2 border-[#0D1527] flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
@@ -401,53 +460,70 @@ export function ModeratorView({
                     </div>
                   </div>
                 </div>
-              </div>
+              </motion.div>
             );
           })}
+          </AnimatePresence>
         </div>
       )}
 
-      {/* Delete Confirmation Modal */}
-      {deleteTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-950/60 backdrop-blur-xs">
-          <div className="bg-white rounded-[32px] max-w-md w-full p-6 sm:p-7 border-2 border-[#0D1527] shadow-[8px_8px_0px_#0D1527] animate-scaleIn">
-            <div className="w-12 h-12 rounded-2xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center mb-4">
-              <AlertTriangle className="w-6 h-6" />
-            </div>
+      {/* Delete Confirmation Modal with Animated Transition */}
+      <AnimatePresence>
+        {deleteTarget && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-950/60 backdrop-blur-xs"
+          >
+            <motion.div
+              initial={{ scale: 0.92, opacity: 0, y: 10 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.92, opacity: 0, y: 10 }}
+              transition={{ duration: 0.2 }}
+              className="bg-white rounded-[32px] max-w-md w-full p-6 sm:p-7 border-2 border-[#0D1527] shadow-[8px_8px_0px_#0D1527]"
+            >
+              <div className="w-12 h-12 rounded-2xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center mb-4">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
 
-            <h3 className="text-xl font-black text-[#0D1527] mb-2 tracking-tight">
-              Permanently Delete Question?
-            </h3>
+              <h3 className="text-xl font-black text-[#0D1527] mb-2 tracking-tight">
+                Permanently Delete Question?
+              </h3>
 
-            <p className="text-xs sm:text-sm text-stone-600 mb-4 leading-relaxed font-medium">
-              Are you sure you want to delete this question? This action cannot be undone.
-            </p>
+              <p className="text-xs sm:text-sm text-stone-600 mb-4 leading-relaxed font-medium">
+                Are you sure you want to delete this question? This action cannot be undone.
+              </p>
 
-            <div className="p-3.5 bg-[#F8F6F0] rounded-2xl text-xs text-stone-700 mb-6 border border-[#E7DFCE] line-clamp-3 italic font-medium">
-              "{deleteTarget.content}"
-            </div>
+              <div className="p-3.5 bg-[#F8F6F0] rounded-2xl text-xs text-stone-700 mb-6 border border-[#E7DFCE] line-clamp-3 italic font-medium">
+                "{deleteTarget.content}"
+              </div>
 
-            <div className="flex items-center justify-end gap-3">
-              <button
-                onClick={() => setDeleteTarget(null)}
-                disabled={isDeleting}
-                className="px-5 py-2.5 text-xs font-bold text-stone-600 hover:bg-stone-100 rounded-full transition-colors cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                id="confirm-delete-modal-btn"
-                onClick={confirmDelete}
-                disabled={isDeleting}
-                className="px-5 py-2.5 text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white rounded-full transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
-              >
-                <Trash2 className="w-4 h-4" />
-                <span>{isDeleting ? 'Deleting...' : 'Yes, Delete Permanently'}</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+              <div className="flex items-center justify-end gap-3">
+                <motion.button
+                  whileTap={{ scale: 0.94 }}
+                  onClick={() => setDeleteTarget(null)}
+                  disabled={isDeleting}
+                  className="px-5 py-2.5 text-xs font-bold text-stone-600 hover:bg-stone-100 rounded-full transition-colors cursor-pointer"
+                >
+                  Cancel
+                </motion.button>
+                <motion.button
+                  whileTap={{ scale: 0.94 }}
+                  id="confirm-delete-modal-btn"
+                  onClick={confirmDelete}
+                  disabled={isDeleting}
+                  className="px-5 py-2.5 text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white rounded-full transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>{isDeleting ? 'Deleting...' : 'Yes, Delete Permanently'}</span>
+                </motion.button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

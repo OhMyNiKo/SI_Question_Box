@@ -1,23 +1,205 @@
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
+import { GoogleGenAI } from '@google/genai';
 import {
   QuestionItem,
   getAllQuestions,
   upsertQuestion,
   deleteQuestion,
   formatDateTime,
+  getModeratorPasskey,
+  setModeratorPasskey,
+  ADMIN_PASSKEY,
 } from './server/db';
 
 const PORT = 3000;
 
 export type { QuestionItem };
 
+// Lazy initialization of Gemini GenAI client
+let aiClient: GoogleGenAI | null = null;
+function getAI(): GoogleGenAI | null {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return null;
+  if (!aiClient) {
+    aiClient = new GoogleGenAI({ apiKey });
+  }
+  return aiClient;
+}
+
 async function startServer() {
   const app = express();
   app.use(express.json());
 
   // API Routes
+  // Smart Search: AI-powered semantic matching using Gemini, with fuzzy keyword fallback
+  app.post('/api/search', async (req, res) => {
+    try {
+      const { query, items } = req.body;
+      if (!query || typeof query !== 'string' || !query.trim()) {
+        res.json({ matchedIds: [], smart: false });
+        return;
+      }
+
+      const cleanQuery = query.trim();
+      if (!Array.isArray(items) || items.length === 0) {
+        res.json({ matchedIds: [], smart: false });
+        return;
+      }
+
+      // 1. Try Gemini GenAI semantic search if API key is present
+      const ai = getAI();
+      if (ai) {
+        try {
+          const catalog = items.slice(0, 60).map((item: any) => ({
+            id: item.id,
+            content: typeof item.content === 'string' ? item.content.slice(0, 300) : '',
+            reply: typeof item.reply === 'string' ? item.reply.slice(0, 300) : '',
+            comments: Array.isArray(item.comments)
+              ? item.comments.slice(0, 4).map((c: any) => (typeof c === 'string' ? c : c?.content || '').slice(0, 150))
+              : [],
+          }));
+
+          const prompt = `You are an advanced search matching and relevance ranking engine for an anonymous student campus Q&A board.
+The student typed this search query:
+"${cleanQuery}"
+
+Catalog of campus questions and official answers:
+${JSON.stringify(catalog)}
+
+Instructions:
+1. The search query may be:
+   - An exact phrase in quotes (e.g. "financial aid", "quiet study", "meal plan").
+   - Multiple words (e.g. "quiet study library", "food dining hall weekend", "stress exam counseling").
+   - A natural language question or phrase (e.g. "how do I get help with tuition", "where to sleep on campus").
+2. Match questions based on:
+   - Exact phrase matches (if quoted or if words appear consecutively).
+   - Multi-word relevance: items addressing multiple words or concepts from the query should receive high scores.
+   - Conceptual / semantic intent and campus synonyms (e.g. "food" <-> "dining hall", "meal plan", "cafeteria"; "depressed/stressed" <-> "wellness center", "counseling").
+3. Score each relevant question from 1 to 100:
+   - 90-100: Exact phrase or direct match on all key concepts.
+   - 70-89: Matches multiple words/concepts or strong semantic intent.
+   - 40-69: Partially matches words or related campus topic.
+   - Below 40: Do not include.
+
+Return a JSON array of objects sorted by relevance descending:
+[
+  { "id": string, "score": number }
+]
+If none are relevant, return an empty array [].
+Output ONLY valid JSON without markdown wrapping.`;
+
+          const response = await ai.models.generateContent({
+            model: 'gemini-3.8-flash',
+            contents: prompt,
+            config: {
+              responseMimeType: 'application/json',
+            },
+          });
+
+          const rawText = response.text?.trim() || '[]';
+          const cleanJson = rawText.replace(/^```json\s*/i, '').replace(/\s*```$/i, '').trim();
+          const parsed = JSON.parse(cleanJson);
+
+          if (Array.isArray(parsed)) {
+            const matchedIds = parsed
+              .filter((p: any) => p && typeof p.id === 'string' && (p.score === undefined || p.score >= 35))
+              .map((p: any) => p.id);
+            res.json({ matchedIds, smart: true });
+            return;
+          }
+        } catch (geminiErr) {
+          console.warn('Gemini semantic search fallback to keyword engine:', geminiErr);
+        }
+      }
+
+      // 2. Fallback: advanced phrase and multi-word token matching
+      const fullClean = cleanQuery.toLowerCase();
+      const quotedPhrases: string[] = [];
+      const unquoted = fullClean.replace(/["']([^"']+)["']/g, (_, phrase) => {
+        const trimmed = phrase.trim();
+        if (trimmed) quotedPhrases.push(trimmed);
+        return ' ';
+      });
+      const tokens = unquoted
+        .split(/[\s,.;:!?/\\(){}[\]<>~`@#$%^&*+=_-]+/)
+        .map((t) => t.trim())
+        .filter((t) => t.length > 0);
+
+      const scored = items
+        .map((item: any) => {
+          const content = (item.content || '').toLowerCase();
+          const reply = (item.reply || '').toLowerCase();
+          const comments = Array.isArray(item.comments)
+            ? item.comments
+                .map((c: any) => (typeof c === 'string' ? c : c?.content || ''))
+                .join(' ')
+                .toLowerCase()
+            : '';
+          const combined = `${content} ${reply} ${comments}`;
+
+          // If quotes were used, verify all quoted phrases are present
+          if (quotedPhrases.length > 0) {
+            const allQuotesMatch = quotedPhrases.every((qp) => combined.includes(qp));
+            if (!allQuotesMatch) return { id: item.id, score: 0 };
+          }
+
+          let score = 0;
+
+          // Quoted phrase bonus
+          if (quotedPhrases.length > 0) {
+            score += quotedPhrases.length * 60;
+          }
+
+          // Full exact continuous phrase match
+          if (fullClean && combined.includes(fullClean)) {
+            score += 80;
+            if (content.includes(fullClean)) score += 40;
+            if (reply.includes(fullClean)) score += 20;
+          }
+
+          // Multiple word tokens
+          const activeTokens = tokens.length > 0 ? tokens : [fullClean];
+          let matchedTokensCount = 0;
+
+          for (const token of activeTokens) {
+            let matched = false;
+            if (content.includes(token)) {
+              score += 25;
+              matched = true;
+            }
+            if (reply.includes(token)) {
+              score += 18;
+              matched = true;
+            }
+            if (comments.includes(token)) {
+              score += 10;
+              matched = true;
+            }
+            if (matched) matchedTokensCount++;
+          }
+
+          // All-words bonus for multi-word searches
+          if (activeTokens.length > 1 && matchedTokensCount === activeTokens.length) {
+            score += 50;
+          } else if (activeTokens.length > 1 && matchedTokensCount > 1) {
+            score += matchedTokensCount * 15;
+          }
+
+          return { id: item.id, score };
+        })
+        .filter((s: any) => s.score > 0)
+        .sort((a: any, b: any) => b.score - a.score)
+        .map((s: any) => s.id);
+
+      res.json({ matchedIds: scored, smart: false });
+    } catch (err) {
+      console.error('Search error:', err);
+      res.status(500).json({ error: 'Search failed', matchedIds: [], smart: false });
+    }
+  });
+
   // Public questions: only approved ones with replies, sorted by newest first
   app.get('/api/questions', async (req, res) => {
     try {
@@ -61,13 +243,86 @@ async function startServer() {
     }
   });
 
-  // Moderator verify passkey
-  app.post('/api/moderator/verify', (req, res) => {
-    const { passkey } = req.body;
-    if (passkey === 'StudentInclusion2026') {
-      res.json({ success: true, message: 'Authorized' });
-    } else {
-      res.status(401).json({ success: false, error: 'Invalid passkey' });
+  // Moderator verify passkey (dynamically checks current passkey)
+  app.post('/api/moderator/verify', async (req, res) => {
+    try {
+      const { passkey } = req.body;
+      const current = await getModeratorPasskey();
+      if (passkey && passkey.trim() === current) {
+        res.json({ success: true, message: 'Authorized' });
+      } else {
+        res.status(401).json({ success: false, error: 'Invalid passkey' });
+      }
+    } catch (err) {
+      console.error('Error verifying moderator passkey:', err);
+      res.status(500).json({ success: false, error: 'Verification error' });
+    }
+  });
+
+  // Admin verify master passkey ("NiKo0709") to access passkey management page
+  app.post('/api/admin/verify', async (req, res) => {
+    try {
+      const { adminPasskey } = req.body;
+      if (adminPasskey && adminPasskey.trim() === ADMIN_PASSKEY) {
+        const currentModeratorPasskey = await getModeratorPasskey();
+        res.json({
+          success: true,
+          message: 'Admin authorized',
+          currentModeratorPasskey,
+        });
+      } else {
+        res.status(401).json({ success: false, error: 'Invalid admin passkey' });
+      }
+    } catch (err) {
+      console.error('Error verifying admin passkey:', err);
+      res.status(500).json({ success: false, error: 'Admin verification failed' });
+    }
+  });
+
+  // Admin get current moderator passkey (requires admin passkey)
+  app.post('/api/admin/get-passkey', async (req, res) => {
+    try {
+      const { adminPasskey } = req.body;
+      if (adminPasskey && adminPasskey.trim() === ADMIN_PASSKEY) {
+        const currentModeratorPasskey = await getModeratorPasskey();
+        res.json({ success: true, currentModeratorPasskey });
+      } else {
+        res.status(401).json({ success: false, error: 'Unauthorized: Invalid admin passkey' });
+      }
+    } catch (err) {
+      res.status(500).json({ success: false, error: 'Failed to retrieve passkey' });
+    }
+  });
+
+  // Admin update moderator passkey (requires admin passkey)
+  app.post('/api/admin/update-passkey', async (req, res) => {
+    try {
+      const { adminPasskey, newPasskey } = req.body;
+      if (!adminPasskey || adminPasskey.trim() !== ADMIN_PASSKEY) {
+        res.status(401).json({ success: false, error: 'Unauthorized: Invalid admin passkey' });
+        return;
+      }
+
+      if (!newPasskey || typeof newPasskey !== 'string' || !newPasskey.trim()) {
+        res.status(400).json({ success: false, error: 'New passkey cannot be empty' });
+        return;
+      }
+
+      const trimmed = newPasskey.trim();
+      if (trimmed.length < 3) {
+        res.status(400).json({ success: false, error: 'Passkey must be at least 3 characters long' });
+        return;
+      }
+
+      const updated = await setModeratorPasskey(trimmed);
+      res.json({
+        success: true,
+        message: 'Moderator passkey successfully updated',
+        currentModeratorPasskey: updated,
+      });
+    } catch (err) {
+      console.error('Error updating moderator passkey:', err);
+      res.status(500).json({ success: false, error: 'Failed to update passkey' });
     }
   });
 

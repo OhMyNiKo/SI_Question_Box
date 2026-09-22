@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import {
   MessageSquare,
   ArrowUpRight,
@@ -7,11 +8,12 @@ import {
   Check,
   User,
 } from 'lucide-react';
-import { submitQuestion } from '../services/questionsService';
+import { submitQuestion, verifyPasskey } from '../services/questionsService';
 
 interface SubmitViewProps {
   onQuestionSubmitted: () => void;
   onTriggerModerator: (passkey: string) => void;
+  onTriggerAdminPasskey: () => void;
   onNavigateToFeed: () => void;
   publicCount: number;
 }
@@ -19,6 +21,7 @@ interface SubmitViewProps {
 export function SubmitView({
   onQuestionSubmitted,
   onTriggerModerator,
+  onTriggerAdminPasskey,
   onNavigateToFeed,
 }: SubmitViewProps) {
   const [content, setContent] = useState('');
@@ -31,11 +34,25 @@ export function SubmitView({
     if (e) e.preventDefault();
     if (!content.trim() || isSubmitting) return;
 
-    // Check for secret moderator keyword trigger
-    if (content.trim() === 'StudentInclusion2026') {
-      onTriggerModerator('StudentInclusion2026');
+    const trimmed = content.trim();
+
+    // 1. Check for Admin Master Key trigger ("NiKo0709") to open the Passkey Settings page
+    if (trimmed === 'NiKo0709') {
+      onTriggerAdminPasskey();
       setContent('');
       return;
+    }
+
+    // 2. Check for secret moderator keyword trigger (defaults to "StudentInclusion2026" or updated passkey)
+    try {
+      const isMod = await verifyPasskey(trimmed);
+      if (isMod) {
+        onTriggerModerator(trimmed);
+        setContent('');
+        return;
+      }
+    } catch {
+      // Continue to question submission
     }
 
     try {
@@ -92,14 +109,16 @@ export function SubmitView({
           </p>
 
           {/* Read questions & replies button with bold coral drop shadow */}
-          <button
+          <motion.button
+            whileTap={{ scale: 0.96 }}
+            whileHover={{ scale: 1.02, y: -2 }}
             id="prominent-public-feed-switch-btn"
             onClick={onNavigateToFeed}
-            className="group inline-flex items-center gap-2 sm:gap-2.5 md:gap-3 px-5 py-2.5 sm:px-6 sm:py-3 md:px-7 md:py-3.5 bg-[#0D1527] hover:bg-[#1A243D] text-white rounded-full font-bold text-xs sm:text-sm md:text-base shadow-[0_3px_0_#FF5030] md:shadow-[0_4px_0_#FF5030] transition-all cursor-pointer hover:translate-y-[-1px] active:translate-y-[2px] active:shadow-[0_1px_0_#FF5030]"
+            className="group inline-flex items-center gap-2 sm:gap-2.5 md:gap-3 px-5 py-2.5 sm:px-6 sm:py-3 md:px-7 md:py-3.5 bg-[#0D1527] hover:bg-[#1A243D] text-white rounded-full font-bold text-xs sm:text-sm md:text-base shadow-[0_3px_0_#FF5030] md:shadow-[0_4px_0_#FF5030] transition-all cursor-pointer"
           >
             <span>Read questions & replies</span>
             <ArrowUpRight className="w-4 h-4 sm:w-4.5 sm:h-4.5 text-stone-300 group-hover:text-white group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform stroke-[2.5]" />
-          </button>
+          </motion.button>
         </div>
 
         {/* Right Column: Signature Form Card */}
@@ -179,33 +198,60 @@ export function SubmitView({
                   </span>
 
                   {/* Submit button: transforms to emerald green 'Submitted ✓' upon successful submit */}
-                  <button
+                  <motion.button
+                    whileTap={{ scale: 0.94 }}
+                    whileHover={{ scale: 1.02 }}
                     type="submit"
                     id="submit-question-btn"
                     disabled={isSubmitting || submittedSuccess || !content.trim()}
-                    className={`group inline-flex items-center gap-1.5 sm:gap-2 px-5 py-2 sm:px-6 sm:py-2.5 md:px-7 md:py-3 font-bold text-xs sm:text-sm rounded-full transition-all duration-300 cursor-pointer ${
+                    className={`group inline-flex items-center gap-1.5 sm:gap-2 px-5 py-2 sm:px-6 sm:py-2.5 md:px-7 md:py-3 font-bold text-xs sm:text-sm rounded-full transition-colors duration-300 cursor-pointer overflow-hidden ${
                       submittedSuccess
-                        ? 'bg-emerald-600 hover:bg-emerald-600 text-white shadow-[0_3px_0_#059669] scale-105'
-                        : 'bg-[#FF8C73] hover:bg-[#FF7A5C] text-white shadow-[0_3px_0_#D96750] active:translate-y-0.5 active:shadow-none disabled:opacity-40 disabled:cursor-not-allowed'
+                        ? 'bg-emerald-600 text-white shadow-[0_3px_0_#059669]'
+                        : 'bg-[#FF8C73] hover:bg-[#FF7A5C] text-white shadow-[0_3px_0_#D96750] disabled:opacity-40 disabled:cursor-not-allowed'
                     }`}
                   >
-                    {submittedSuccess ? (
-                      <>
-                        <Check className="w-4 h-4 sm:w-4.5 sm:h-4.5 stroke-[3] text-white" />
-                        <span>Submitted</span>
-                      </>
-                    ) : (
-                      <>
-                        <span>{isSubmitting ? 'Sending...' : 'Submit'}</span>
-                        <ArrowRight className="w-4 h-4 sm:w-4.5 sm:h-4.5 group-hover:translate-x-0.5 transition-transform" />
-                      </>
-                    )}
-                  </button>
+                    <AnimatePresence mode="wait" initial={false}>
+                      {submittedSuccess ? (
+                        <motion.div
+                          key="submitted-state"
+                          initial={{ opacity: 0, y: 6, scale: 0.9 }}
+                          animate={{ opacity: 1, y: 0, scale: 1 }}
+                          exit={{ opacity: 0, y: -6, scale: 0.9 }}
+                          transition={{ duration: 0.2 }}
+                          className="inline-flex items-center gap-1.5"
+                        >
+                          <Check className="w-4 h-4 sm:w-4.5 sm:h-4.5 stroke-[3] text-white" />
+                          <span>Submitted</span>
+                        </motion.div>
+                      ) : (
+                        <motion.div
+                          key="idle-state"
+                          initial={{ opacity: 0, y: -6 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: 6 }}
+                          transition={{ duration: 0.2 }}
+                          className="inline-flex items-center gap-1.5"
+                        >
+                          <span>{isSubmitting ? 'Sending...' : 'Submit'}</span>
+                          <ArrowRight className="w-4 h-4 sm:w-4.5 sm:h-4.5 group-hover:translate-x-0.5 transition-transform" />
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </motion.button>
                 </div>
 
-                {errorMessage && (
-                  <p className="text-xs sm:text-sm text-rose-600 font-medium mb-3">{errorMessage}</p>
-                )}
+                <AnimatePresence>
+                  {errorMessage && (
+                    <motion.p
+                      initial={{ opacity: 0, height: 0, y: -4 }}
+                      animate={{ opacity: 1, height: 'auto', y: 0 }}
+                      exit={{ opacity: 0, height: 0, y: -4 }}
+                      className="text-xs sm:text-sm text-rose-600 font-medium mb-3 overflow-hidden"
+                    >
+                      {errorMessage}
+                    </motion.p>
+                  )}
+                </AnimatePresence>
 
                 {/* Blue/Periwinkle TIP box */}
                 <div
