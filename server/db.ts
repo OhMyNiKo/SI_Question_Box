@@ -3,6 +3,15 @@ import path from 'path';
 import { getDb } from './firebase';
 import { collection, getDocs, doc, setDoc, deleteDoc, getDoc } from 'firebase/firestore';
 
+export interface CommentItem {
+  id: string;
+  authorName?: string;
+  content: string;
+  createdAt: string;
+  createdAtFormatted: string;
+  likes?: number;
+}
+
 export interface QuestionItem {
   id: string;
   content: string;
@@ -14,6 +23,9 @@ export interface QuestionItem {
   repliedBy?: string;
   status: 'pending' | 'approved';
   authorName?: string;
+  category?: string;
+  likes?: number;
+  comments?: CommentItem[];
 }
 
 export function formatDateTime(date: Date = new Date()): string {
@@ -210,6 +222,50 @@ export async function deleteQuestion(id: string): Promise<boolean> {
     saveLocalQuestions(filtered);
   }
   return found;
+}
+
+export async function toggleQuestionLike(questionId: string, isLiked: boolean): Promise<number> {
+  const list = await getAllQuestions();
+  const target = list.find((q) => q.id === questionId);
+  if (!target) return 0;
+
+  const currentLikes = target.likes || 0;
+  const newLikes = isLiked ? currentLikes + 1 : Math.max(0, currentLikes - 1);
+  target.likes = newLikes;
+  await upsertQuestion(target);
+  return newLikes;
+}
+
+export async function addCommentToQuestion(questionId: string, comment: CommentItem): Promise<CommentItem | null> {
+  const list = await getAllQuestions();
+  const target = list.find((q) => q.id === questionId);
+  if (!target) return null;
+
+  if (!target.comments) {
+    target.comments = [];
+  }
+  target.comments.push(comment);
+  await upsertQuestion(target);
+  return comment;
+}
+
+export async function toggleCommentLike(
+  questionId: string,
+  commentId: string,
+  isLiked: boolean
+): Promise<number> {
+  const list = await getAllQuestions();
+  const target = list.find((q) => q.id === questionId);
+  if (!target || !target.comments) return 0;
+
+  const comment = target.comments.find((c) => c.id === commentId);
+  if (!comment) return 0;
+
+  const currentLikes = comment.likes || 0;
+  const newLikes = isLiked ? currentLikes + 1 : Math.max(0, currentLikes - 1);
+  comment.likes = newLikes;
+  await upsertQuestion(target);
+  return newLikes;
 }
 
 // -------------------------------------------------------------

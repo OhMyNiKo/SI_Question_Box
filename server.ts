@@ -4,6 +4,7 @@ import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import {
   QuestionItem,
+  CommentItem,
   getAllQuestions,
   upsertQuestion,
   deleteQuestion,
@@ -11,11 +12,44 @@ import {
   getModeratorPasskey,
   setModeratorPasskey,
   ADMIN_PASSKEY,
+  toggleQuestionLike,
+  addCommentToQuestion,
+  toggleCommentLike,
 } from './server/db';
 
 const PORT = 3000;
 
-export type { QuestionItem };
+export type { QuestionItem, CommentItem };
+
+// Active Server-Sent Events (SSE) clients for real-time synchronization across all devices
+const sseClients = new Set<express.Response>();
+
+export async function broadcastQuestions(): Promise<void> {
+  try {
+    const list = await getAllQuestions();
+    const payload = `data: ${JSON.stringify({ type: 'sync', questions: list, timestamp: Date.now() })}\n\n`;
+    for (const client of Array.from(sseClients)) {
+      try {
+        client.write(payload);
+      } catch {
+        sseClients.delete(client);
+      }
+    }
+  } catch (err) {
+    console.error('SSE broadcast error:', err);
+  }
+}
+
+// 15-second heartbeat ping to prevent proxies from dropping idle SSE streams
+setInterval(() => {
+  for (const client of Array.from(sseClients)) {
+    try {
+      client.write(':ping\n\n');
+    } catch {
+      sseClients.delete(client);
+    }
+  }
+}, 15000);
 
 // Lazy initialization of Gemini GenAI client
 let aiClient: GoogleGenAI | null = null;
@@ -200,10 +234,42 @@ Output ONLY valid JSON without markdown wrapping.`;
     }
   });
 
-  // Public questions: only approved ones with replies, sorted by newest first
+  // Real-time Server-Sent Events (SSE) stream for instant synchronization across all devices
+  app.get('/api/questions/stream', async (req, res) => {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+      'Access-Control-Allow-Origin': '*',
+    });
+
+    // Send immediate snapshot upon connection
+    try {
+      const list = await getAllQuestions();
+      res.write(`data: ${JSON.stringify({ type: 'init', questions: list, timestamp: Date.now() })}\n\n`);
+    } catch (err) {
+      console.error('Initial SSE send error:', err);
+    }
+
+    sseClients.add(res);
+
+    req.on('close', () => {
+      sseClients.delete(res);
+    });
+  });
+
+  // Public questions: approved questions with replies by default, or all questions if ?scope=all
   app.get('/api/questions', async (req, res) => {
     try {
       const list = await getAllQuestions();
+      if (req.query.scope === 'all') {
+        const sorted = [...list].sort(
+          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+        res.json(sorted);
+        return;
+      }
       const publicList = list
         .filter((q) => q.status === 'approved' && Boolean(q.reply))
         .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -231,11 +297,14 @@ Output ONLY valid JSON without markdown wrapping.`;
         createdAt: now.toISOString(),
         createdAtFormatted: formatDateTime(now),
         status: 'pending',
+        likes: 0,
+        comments: [],
         authorName:
           typeof authorName === 'string' && authorName.trim() ? authorName.trim() : 'Student',
       };
 
       await upsertQuestion(newQuestion);
+      broadcastQuestions().catch((err) => console.error('Broadcast note:', err));
       res.status(201).json(newQuestion);
     } catch (err) {
       console.error('Error submitting question:', err);
@@ -367,6 +436,7 @@ Output ONLY valid JSON without markdown wrapping.`;
       };
 
       await upsertQuestion(updated);
+      broadcastQuestions().catch((err) => console.error('Broadcast note:', err));
       res.json(updated);
     } catch (err) {
       console.error('Error replying to question:', err);
@@ -374,7 +444,7 @@ Output ONLY valid JSON without markdown wrapping.`;
     }
   });
 
-  // Moderator delete question permanently
+  // Moderator delete question permanently (DELETE method)
   app.delete('/api/moderator/questions/:id', async (req, res) => {
     try {
       const { id } = req.params;
@@ -383,10 +453,94 @@ Output ONLY valid JSON without markdown wrapping.`;
         res.status(404).json({ error: 'Question not found' });
         return;
       }
+      broadcastQuestions().catch((err) => console.error('Broadcast note:', err));
       res.json({ success: true, message: 'Question permanently deleted' });
     } catch (err) {
       console.error('Error deleting question:', err);
       res.status(500).json({ error: 'Failed to delete question' });
+    }
+  });
+
+  // Moderator delete question (POST alternative for high-compatibility proxies)
+  app.post('/api/moderator/delete', async (req, res) => {
+    try {
+      const { id } = req.body;
+      if (!id) {
+        res.status(400).json({ error: 'Question id is required' });
+        return;
+      }
+      const deleted = await deleteQuestion(id);
+      if (!deleted) {
+        res.status(404).json({ error: 'Question not found' });
+        return;
+      }
+      broadcastQuestions().catch((err) => console.error('Broadcast note:', err));
+      res.json({ success: true, message: 'Question permanently deleted' });
+    } catch (err) {
+      console.error('Error deleting question via POST:', err);
+      res.status(500).json({ error: 'Failed to delete question' });
+    }
+  });
+
+  // Like or unlike a question
+  app.post('/api/questions/:id/like', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { isLiked } = req.body;
+      const likes = await toggleQuestionLike(id, Boolean(isLiked));
+      broadcastQuestions().catch((err) => console.error('Broadcast note:', err));
+      res.json({ success: true, likes });
+    } catch (err) {
+      console.error('Error liking question:', err);
+      res.status(500).json({ error: 'Failed to like question' });
+    }
+  });
+
+  // Add comment to a question
+  app.post('/api/questions/:id/comments', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { content, authorName } = req.body;
+      if (!content || typeof content !== 'string' || !content.trim()) {
+        res.status(400).json({ error: 'Comment content is required' });
+        return;
+      }
+
+      const now = new Date();
+      const newComment: CommentItem = {
+        id: `c-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        content: content.trim(),
+        authorName: authorName && authorName.trim() ? authorName.trim() : 'Student',
+        createdAt: now.toISOString(),
+        createdAtFormatted: formatDateTime(now),
+        likes: 0,
+      };
+
+      const result = await addCommentToQuestion(id, newComment);
+      if (!result) {
+        res.status(404).json({ error: 'Question not found' });
+        return;
+      }
+
+      broadcastQuestions().catch((err) => console.error('Broadcast note:', err));
+      res.status(201).json(result);
+    } catch (err) {
+      console.error('Error adding comment:', err);
+      res.status(500).json({ error: 'Failed to add comment' });
+    }
+  });
+
+  // Like or unlike a comment
+  app.post('/api/questions/:id/comments/:commentId/like', async (req, res) => {
+    try {
+      const { id, commentId } = req.params;
+      const { isLiked } = req.body;
+      const likes = await toggleCommentLike(id, commentId, Boolean(isLiked));
+      broadcastQuestions().catch((err) => console.error('Broadcast note:', err));
+      res.json({ success: true, likes });
+    } catch (err) {
+      console.error('Error liking comment:', err);
+      res.status(500).json({ error: 'Failed to like comment' });
     }
   });
 

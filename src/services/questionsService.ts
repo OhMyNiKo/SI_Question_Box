@@ -4,6 +4,7 @@ import {
   doc,
   setDoc,
   deleteDoc,
+  onSnapshot,
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { QuestionItem, CommentItem } from '../types';
@@ -210,10 +211,26 @@ function withTimeout<T>(promise: Promise<T>, ms = 3000): Promise<T> {
 }
 
 export async function getAllQuestions(): Promise<QuestionItem[]> {
+  // 1. Fetch from central authoritative server first
+  try {
+    const res = await withTimeout(fetch('/api/questions?scope=all'), 3000);
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        const clean = data.filter((q) => q && !q.id?.startsWith('_'));
+        saveLocalQuestions(clean);
+        return clean;
+      }
+    }
+  } catch (err) {
+    console.warn('Server getAllQuestions note (falling back to Firestore/local):', err);
+  }
+
+  // 2. Fetch from Firestore if available
   const firestore = db;
   if (firestore) {
     try {
-      const snap = await withTimeout(getDocs(collection(firestore, 'questions')), 3500);
+      const snap = await withTimeout(getDocs(collection(firestore, 'questions')), 3000);
       if (!snap.empty) {
         const list: QuestionItem[] = [];
         snap.forEach((d) => {
@@ -224,19 +241,13 @@ export async function getAllQuestions(): Promise<QuestionItem[]> {
             }
           }
         });
-        saveLocalQuestions(list);
-        return list;
-      } else {
-        // Initial seed into Firebase
-        const seedPromises = INITIAL_QUESTIONS.map((q) =>
-          setDoc(doc(firestore, 'questions', q.id), q)
-        );
-        Promise.all(seedPromises).catch((err) => console.warn('Seeding note:', err));
-        saveLocalQuestions(INITIAL_QUESTIONS);
-        return [...INITIAL_QUESTIONS];
+        if (list.length > 0) {
+          saveLocalQuestions(list);
+          return list;
+        }
       }
     } catch (err) {
-      console.warn('Firestore load failed or timed out; reading from local storage:', err);
+      console.warn('Firestore load note:', err);
     }
   }
 
@@ -244,6 +255,18 @@ export async function getAllQuestions(): Promise<QuestionItem[]> {
 }
 
 export async function getPublicQuestions(): Promise<QuestionItem[]> {
+  try {
+    const res = await withTimeout(fetch('/api/questions'), 2500);
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        return data;
+      }
+    }
+  } catch {
+    // fallback to local filter
+  }
+
   const all = await getAllQuestions();
   return all
     .filter((q) => q.status === 'approved' && Boolean(q.reply))
@@ -251,38 +274,77 @@ export async function getPublicQuestions(): Promise<QuestionItem[]> {
 }
 
 export async function getModeratorQuestions(): Promise<QuestionItem[]> {
+  try {
+    const res = await withTimeout(fetch('/api/moderator/questions'), 2500);
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        return data;
+      }
+    }
+  } catch {
+    // fallback
+  }
+
   const all = await getAllQuestions();
   return [...all].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
 
 export async function submitQuestion(content: string, authorName?: string): Promise<QuestionItem> {
   const trimmed = content.trim();
+  const author = authorName && authorName.trim() ? authorName.trim() : 'Student';
   const now = new Date();
-  const newQuestion: QuestionItem = {
+
+  // Optimistic local item
+  const optimisticQuestion: QuestionItem = {
     id: `q-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
     content: trimmed,
     createdAt: now.toISOString(),
     createdAtFormatted: formatDateTime(now),
     status: 'pending',
-    authorName: authorName && authorName.trim() ? authorName.trim() : 'Student',
+    likes: 0,
+    comments: [],
+    authorName: author,
   };
 
-  // Always update local storage first so the user is NEVER blocked
   const local = getLocalQuestions();
-  local.unshift(newQuestion);
+  local.unshift(optimisticQuestion);
   saveLocalQuestions(local);
 
-  // Sync to Firebase Firestore
+  let finalQuestion = optimisticQuestion;
+
+  // 1. Submit to central server for instant real-time synchronization to all devices
+  try {
+    const res = await withTimeout(
+      fetch('/api/questions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: trimmed, authorName: author }),
+      }),
+      3500
+    );
+    if (res.ok) {
+      finalQuestion = await res.json();
+      const updatedLocal = getLocalQuestions().map((q) =>
+        q.id === optimisticQuestion.id ? finalQuestion : q
+      );
+      saveLocalQuestions(updatedLocal);
+    }
+  } catch (err) {
+    console.warn('Server question submit note:', err);
+  }
+
+  // 2. Also save to Firestore
   const firestore = db;
   if (firestore) {
     try {
-      await withTimeout(setDoc(doc(firestore, 'questions', newQuestion.id), newQuestion), 3000);
+      await withTimeout(setDoc(doc(firestore, 'questions', finalQuestion.id), finalQuestion), 2000);
     } catch (err) {
-      console.warn('Firestore submission sync note:', err);
+      console.warn('Firestore submission note:', err);
     }
   }
 
-  return newQuestion;
+  return finalQuestion;
 }
 
 export async function replyToQuestion(
@@ -290,41 +352,68 @@ export async function replyToQuestion(
   reply: string,
   repliedBy = 'Student Inclusion Team'
 ): Promise<QuestionItem> {
-  const all = await getAllQuestions();
-  const target = all.find((q) => q.id === id);
-  if (!target) {
-    throw new Error('Question not found');
-  }
-
+  const cleanReply = reply.trim();
+  const cleanRepliedBy = repliedBy.trim() || 'Student Inclusion Team';
   const now = new Date();
-  const updated: QuestionItem = {
-    ...target,
-    reply: reply.trim(),
+
+  // Optimistic local update
+  const local = getLocalQuestions();
+  const idx = local.findIndex((q) => q.id === id);
+  let updatedQuestion: QuestionItem = {
+    id,
+    content: '',
+    createdAt: now.toISOString(),
+    createdAtFormatted: formatDateTime(now),
+    reply: cleanReply,
     repliedAt: now.toISOString(),
     repliedAtFormatted: formatDateTime(now),
-    repliedBy: repliedBy.trim() || 'Student Inclusion Team',
+    repliedBy: cleanRepliedBy,
     status: 'approved',
   };
 
-  const local = getLocalQuestions();
-  const idx = local.findIndex((q) => q.id === id);
   if (idx >= 0) {
-    local[idx] = updated;
-  } else {
-    local.push(updated);
+    updatedQuestion = {
+      ...local[idx],
+      reply: cleanReply,
+      repliedAt: now.toISOString(),
+      repliedAtFormatted: formatDateTime(now),
+      repliedBy: cleanRepliedBy,
+      status: 'approved',
+    };
+    local[idx] = updatedQuestion;
+    saveLocalQuestions(local);
   }
-  saveLocalQuestions(local);
 
+  // 1. Submit to central server (triggers instant SSE broadcast to all devices)
+  try {
+    const res = await withTimeout(
+      fetch('/api/moderator/reply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, reply: cleanReply, repliedBy: cleanRepliedBy }),
+      }),
+      3500
+    );
+    if (res.ok) {
+      updatedQuestion = await res.json();
+      const refreshed = getLocalQuestions().map((q) => (q.id === id ? updatedQuestion : q));
+      saveLocalQuestions(refreshed);
+    }
+  } catch (err) {
+    console.warn('Server reply note:', err);
+  }
+
+  // 2. Sync to Firestore
   const firestore = db;
   if (firestore) {
     try {
-      await withTimeout(setDoc(doc(firestore, 'questions', id), updated), 3000);
+      await withTimeout(setDoc(doc(firestore, 'questions', id), updatedQuestion), 2000);
     } catch (err) {
       console.warn('Firestore reply sync note:', err);
     }
   }
 
-  return updated;
+  return updatedQuestion;
 }
 
 export async function deleteQuestion(id: string): Promise<boolean> {
@@ -332,10 +421,25 @@ export async function deleteQuestion(id: string): Promise<boolean> {
   const filtered = local.filter((q) => q.id !== id);
   saveLocalQuestions(filtered);
 
+  // 1. Delete on central server (triggers instant SSE broadcast to all devices)
+  try {
+    await withTimeout(
+      fetch('/api/moderator/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      }),
+      3500
+    );
+  } catch (err) {
+    console.warn('Server delete question note:', err);
+  }
+
+  // 2. Delete on Firestore
   const firestore = db;
   if (firestore) {
     try {
-      await withTimeout(deleteDoc(doc(firestore, 'questions', id)), 3000);
+      await withTimeout(deleteDoc(doc(firestore, 'questions', id)), 2000);
     } catch (err) {
       console.warn('Firestore delete sync note:', err);
     }
@@ -526,20 +630,33 @@ export function saveUserLikedComment(commentId: string, isLiked: boolean): void 
 export async function toggleQuestionLike(questionId: string, isLiked: boolean): Promise<number> {
   const local = getLocalQuestions();
   const target = local.find((q) => q.id === questionId);
-  if (!target) return 0;
-
-  const currentLikes = target.likes || 0;
+  const currentLikes = target?.likes || 0;
   const newLikes = isLiked ? currentLikes + 1 : Math.max(0, currentLikes - 1);
-  target.likes = newLikes;
-  saveLocalQuestions(local);
+
+  if (target) {
+    target.likes = newLikes;
+    saveLocalQuestions(local);
+  }
   saveUserLikedQuestion(questionId, isLiked);
 
+  // 1. Central server update (triggers real-time SSE broadcast to all devices)
+  try {
+    fetch(`/api/questions/${encodeURIComponent(questionId)}/like`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isLiked }),
+    }).catch((err) => console.warn('Server question like note:', err));
+  } catch (err) {
+    console.warn('Like request note:', err);
+  }
+
+  // 2. Firestore update
   const firestore = db;
-  if (firestore) {
+  if (firestore && target) {
     try {
-      await withTimeout(setDoc(doc(firestore, 'questions', questionId), target), 3000);
-    } catch (err) {
-      console.warn('Firestore question like sync note:', err);
+      setDoc(doc(firestore, 'questions', questionId), target).catch(() => {});
+    } catch {
+      // ignore
     }
   }
 
@@ -552,34 +669,52 @@ export async function addComment(
   content: string,
   authorName?: string
 ): Promise<CommentItem> {
-  const local = getLocalQuestions();
-  const target = local.find((q) => q.id === questionId);
-  if (!target) {
-    throw new Error('Question not found');
-  }
-
+  const author = authorName && authorName.trim() ? authorName.trim() : 'Student';
   const now = new Date();
   const newComment: CommentItem = {
     id: `c-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
     content: content.trim(),
-    authorName: authorName && authorName.trim() ? authorName.trim() : 'Student',
+    authorName: author,
     createdAt: now.toISOString(),
     createdAtFormatted: formatDateTime(now),
     likes: 0,
   };
 
-  if (!target.comments) {
-    target.comments = [];
+  const local = getLocalQuestions();
+  const target = local.find((q) => q.id === questionId);
+  if (target) {
+    if (!target.comments) {
+      target.comments = [];
+    }
+    target.comments.push(newComment);
+    saveLocalQuestions(local);
   }
-  target.comments.push(newComment);
-  saveLocalQuestions(local);
 
+  // 1. Central server update (triggers instant real-time broadcast to all devices)
+  try {
+    const res = await withTimeout(
+      fetch(`/api/questions/${encodeURIComponent(questionId)}/comments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: content.trim(), authorName: author }),
+      }),
+      3500
+    );
+    if (res.ok) {
+      const serverComment = await res.json();
+      return serverComment;
+    }
+  } catch (err) {
+    console.warn('Server addComment note:', err);
+  }
+
+  // 2. Firestore update
   const firestore = db;
-  if (firestore) {
+  if (firestore && target) {
     try {
-      await withTimeout(setDoc(doc(firestore, 'questions', questionId), target), 3000);
-    } catch (err) {
-      console.warn('Firestore add comment sync note:', err);
+      setDoc(doc(firestore, 'questions', questionId), target).catch(() => {});
+    } catch {
+      // ignore
     }
   }
 
@@ -594,27 +729,150 @@ export async function toggleCommentLike(
 ): Promise<number> {
   const local = getLocalQuestions();
   const target = local.find((q) => q.id === questionId);
-  if (!target || !target.comments) return 0;
-
-  const comment = target.comments.find((c) => c.id === commentId);
-  if (!comment) return 0;
-
-  const currentLikes = comment.likes || 0;
+  const comment = target?.comments?.find((c) => c.id === commentId);
+  const currentLikes = comment?.likes || 0;
   const newLikes = isLiked ? currentLikes + 1 : Math.max(0, currentLikes - 1);
-  comment.likes = newLikes;
-  saveLocalQuestions(local);
+
+  if (comment) {
+    comment.likes = newLikes;
+    saveLocalQuestions(local);
+  }
   saveUserLikedComment(commentId, isLiked);
 
+  // 1. Central server update
+  try {
+    fetch(
+      `/api/questions/${encodeURIComponent(questionId)}/comments/${encodeURIComponent(commentId)}/like`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isLiked }),
+      }
+    ).catch((err) => console.warn('Server comment like note:', err));
+  } catch (err) {
+    console.warn('Comment like request note:', err);
+  }
+
+  // 2. Firestore update
   const firestore = db;
-  if (firestore) {
+  if (firestore && target) {
     try {
-      await withTimeout(setDoc(doc(firestore, 'questions', questionId), target), 3000);
-    } catch (err) {
-      console.warn('Firestore comment like sync note:', err);
+      setDoc(doc(firestore, 'questions', questionId), target).catch(() => {});
+    } catch {
+      // ignore
     }
   }
 
   return newLikes;
+}
+
+/**
+ * Real-time synchronization subscriber across all devices:
+ * 1. Connects to Server-Sent Events (SSE) `/api/questions/stream` for sub-second updates
+ * 2. Listens to Firebase Firestore `onSnapshot` when available
+ * 3. Keeps a resilient 4-second polling timer fallback in case mobile browsers sleep or drop SSE
+ */
+export function subscribeToRealtimeQuestions(
+  callback: (questions: QuestionItem[]) => void
+): () => void {
+  let isClosed = false;
+
+  // 1. Server-Sent Events (SSE)
+  let eventSource: EventSource | null = null;
+  const setupSSE = () => {
+    if (isClosed) return;
+    try {
+      eventSource = new EventSource('/api/questions/stream');
+
+      eventSource.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload && Array.isArray(payload.questions) && payload.questions.length > 0) {
+            const cleanList: QuestionItem[] = payload.questions.filter(
+              (q: any) => q && !q.id?.startsWith('_')
+            );
+            saveLocalQuestions(cleanList);
+            callback(cleanList);
+          }
+        } catch {
+          // ignore parsing ping or non-json messages
+        }
+      };
+
+      eventSource.onerror = () => {
+        // EventSource will automatically attempt reconnection
+      };
+    } catch (err) {
+      console.warn('SSE subscription setup note:', err);
+    }
+  };
+
+  setupSSE();
+
+  // 2. Firebase Firestore onSnapshot listener
+  let unsubFirestore: (() => void) | null = null;
+  if (db) {
+    try {
+      unsubFirestore = onSnapshot(
+        collection(db, 'questions'),
+        (snapshot) => {
+          if (!snapshot.empty) {
+            const list: QuestionItem[] = [];
+            snapshot.forEach((d) => {
+              if (!d.id.startsWith('_')) {
+                const qData = d.data() as QuestionItem;
+                if (qData && qData.content) {
+                  list.push(qData);
+                }
+              }
+            });
+            if (list.length > 0) {
+              saveLocalQuestions(list);
+              callback(list);
+            }
+          }
+        },
+        (err) => {
+          // Firestore listener note - SSE and periodic polling handle sync
+          console.warn('Firestore onSnapshot listener note:', err?.message || err);
+        }
+      );
+    } catch {
+      // ignore
+    }
+  }
+
+  // 3. Resilient 4-second polling fallback for devices on sleep/unstable networks
+  const pollInterval = setInterval(async () => {
+    if (isClosed) return;
+    try {
+      const res = await fetch('/api/questions?scope=all');
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          const clean: QuestionItem[] = data.filter((q) => q && !q.id?.startsWith('_'));
+          saveLocalQuestions(clean);
+          callback(clean);
+        }
+      }
+    } catch {
+      // silent background fallback
+    }
+  }, 4000);
+
+  // Return unsubscribe cleanup function
+  return () => {
+    isClosed = true;
+    if (eventSource) {
+      eventSource.close();
+      eventSource = null;
+    }
+    clearInterval(pollInterval);
+    if (unsubFirestore) {
+      unsubFirestore();
+      unsubFirestore = null;
+    }
+  };
 }
 
 // Helper to parse search queries for exact quoted phrases and individual words

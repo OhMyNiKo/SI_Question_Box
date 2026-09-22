@@ -1,0 +1,64 @@
+[
+  {
+    "id": "q-101",
+    "content": "Can we have dedicated quiet hours and low-sensory zones in the main library during midterms week for neurodivergent students?",
+    "createdAt": "2026-09-20T12:19:50.754Z",
+    "createdAtFormatted": "2026-09-20 12:19:50",
+    "reply": "Thank you for this essential feedback! We coordinated with the Library Council, and Room 302 and the 4th-floor annex will be designated as sensory-friendly quiet spaces with dimmable warm lighting and noise-canceling headphones starting this Monday.",
+    "repliedAt": "2026-09-21T00:19:50.755Z",
+    "repliedAtFormatted": "2026-09-21 0:19:50",
+    "repliedBy": "Student Inclusion Team",
+    "status": "approved"
+  },
+  {
+    "id": "q-102",
+    "content": "Are there any financial grants or subsidies available for low-income students who cannot afford the lab kit fees for engineering classes?",
+    "createdAt": "2026-09-21T06:19:50.755Z",
+    "createdAtFormatted": "2026-09-21 6:19:50",
+    "reply": "Yes! The Student Inclusion Equity Emergency Fund covers 100% of required lab gear and course materials. You can apply without invasive documentation through the confidential emergency aid portal on the student affairs page.",
+    "repliedAt": "2026-09-21T16:19:50.755Z",
+    "repliedAtFormatted": "2026-09-21 16:19:50",
+    "repliedBy": "Student Inclusion Team",
+    "status": "approved"
+  },
+  {
+    "id": "q-103",
+    "content": "Could the cafeteria offer more clearly labeled halal and kosher hot meal options every day instead of just once a week?",
+    "createdAt": "2026-09-21T14:19:50.755Z",
+    "createdAtFormatted": "2026-09-21 14:19:50",
+    "reply": "Great suggestion. Dining Services has committed to standardizing daily certified halal and kosher hot options at the Global Flavors counter beginning next semester, complete with ingredient allergen cards.",
+    "repliedAt": "2026-09-21T22:19:50.755Z",
+    "repliedAtFormatted": "2026-09-21 22:19:50",
+    "repliedBy": "Student Inclusion Team",
+    "status": "approved"
+  },
+  {
+    "id": "q-104",
+    "content": "Is there an anonymous way to report subtle microaggressions in seminar classrooms without fear of faculty retaliation?",
+    "createdAt": "2026-09-22T00:19:50.755Z",
+    "createdAtFormatted": "2026-09-22 0:19:50",
+    "reply": "Absolutely. The campus Ombudsperson operates a strictly confidential, independent reporting channel where reports are aggregated anonymously to guide mandatory faculty cultural competence workshops.",
+    "repliedAt": "2026-09-22T06:19:50.755Z",
+    "repliedAtFormatted": "2026-09-22 6:19:50",
+    "repliedBy": "Student Inclusion Team",
+    "status": "approved"
+  },
+  {
+    "id": "q-105",
+    "content": "How can international students get involved in organizing cultural heritage months and multicultural performance nights?",
+    "createdAt": "2026-09-22T04:19:50.755Z",
+    "createdAtFormatted": "2026-09-22 4:19:50",
+    "reply": "We warmly welcome all international students! The Student Inclusion Committee hosts open steering committee meetings every Thursday at 4 PM in the Multicultural Lounge. Drop in or email us directly!",
+    "repliedAt": "2026-09-22T09:19:50.755Z",
+    "repliedAtFormatted": "2026-09-22 9:19:50",
+    "repliedBy": "Student Inclusion Team",
+    "status": "approved"
+  },
+  {
+    "id": "q-106",
+    "content": "Could we get automatic door openers installed on the older North Wing restrooms? Wheelchair navigation is really difficult there right now.",
+    "createdAt": "2026-09-22T11:34:50.755Z",
+    "createdAtFormatted": "2026-09-22 11:34:50",
+    "status": "pending"
+  }
+]

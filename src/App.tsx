@@ -12,6 +12,7 @@ import {
   replyToQuestion,
   deleteQuestion,
   verifyPasskey,
+  subscribeToRealtimeQuestions,
 } from './services/questionsService';
 
 export default function App() {
@@ -52,13 +53,32 @@ export default function App() {
     }
   }, []);
 
-  // Initial load
+  // Real-time synchronization across all devices and clients
   useEffect(() => {
+    // Initial fetch
     fetchPublicQuestions();
-    if (isModerator) {
-      fetchModeratorQuestions();
-    }
-  }, [fetchPublicQuestions, fetchModeratorQuestions, isModerator]);
+    fetchModeratorQuestions();
+
+    // Subscribe to real-time events (Server-Sent Events stream + Firestore onSnapshot + periodic fallback)
+    const unsubscribe = subscribeToRealtimeQuestions((allQuestions) => {
+      // 1. Update public questions (approved with replies, newest first)
+      const approvedList = allQuestions
+        .filter((q) => q.status === 'approved' && Boolean(q.reply))
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      setPublicQuestions(approvedList);
+
+      // 2. Update moderator questions (all questions, newest first)
+      const modSorted = [...allQuestions].sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      );
+      setAllModeratorQuestions(modSorted);
+      setIsLoading(false);
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [fetchPublicQuestions, fetchModeratorQuestions]);
 
   // Handle secret keyword trigger: "StudentInclusion2026" or updated moderator passkey
   const handleTriggerModerator = async (passkey: string) => {
