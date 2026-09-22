@@ -5,6 +5,7 @@ import { SubmitView } from './components/SubmitView';
 import { PublicFeedView } from './components/PublicFeedView';
 import { ModeratorView } from './components/ModeratorView';
 import { PasskeySettingsView } from './components/PasskeySettingsView';
+import { ModeratorLoginModal } from './components/ModeratorLoginModal';
 import { QuestionItem, ActiveView } from './types';
 import {
   getPublicQuestions,
@@ -22,6 +23,7 @@ export default function App() {
     return localStorage.getItem('si_is_moderator') === 'true';
   });
   const [initialAdminAuth, setInitialAdminAuth] = useState(false);
+  const [isModeratorModalOpen, setIsModeratorModalOpen] = useState(false);
 
   const [publicQuestions, setPublicQuestions] = useState<QuestionItem[]>([]);
   const [allModeratorQuestions, setAllModeratorQuestions] = useState<QuestionItem[]>([]);
@@ -126,10 +128,10 @@ export default function App() {
       localStorage.setItem('si_is_moderator', 'true');
       setActiveView('moderation');
       await fetchModeratorQuestions();
-      setModeratorBannerNotice('Moderator Mode Activated: Teleported to Reviewer Portal');
+      setModeratorBannerNotice('Moderator Mode Activated: Reviewer Portal');
       setTimeout(() => setModeratorBannerNotice(null), 5000);
     } else {
-      alert('Invalid passkey. Only the currently confirmed passkey is accepted.');
+      setIsModeratorModalOpen(true);
     }
   };
 
@@ -177,6 +179,7 @@ export default function App() {
         setActiveView={setActiveView}
         isModerator={isModerator}
         onLogoutModerator={handleLogoutModerator}
+        onOpenModeratorLogin={() => setIsModeratorModalOpen(true)}
         publicCount={publicQuestions.length}
       />
 
@@ -215,6 +218,7 @@ export default function App() {
                 onTriggerModerator={handleTriggerModerator}
                 onTriggerAdminPasskey={handleTriggerAdminPasskey}
                 onNavigateToFeed={() => setActiveView('public_feed')}
+                onOpenModeratorLogin={() => setIsModeratorModalOpen(true)}
                 publicCount={publicQuestions.length}
               />
             </motion.div>
@@ -279,24 +283,48 @@ export default function App() {
                   localStorage.removeItem('si_is_moderator');
                   localStorage.removeItem('si_moderator_session_version');
                 }}
-                onNavigateToModeration={async () => {
-                  const currentKey = localStorage.getItem('si_moderator_passkey') || '';
-                  const valid = await verifyPasskey(currentKey);
-                  if (valid) {
-                    setIsModerator(true);
-                    localStorage.setItem('si_is_moderator', 'true');
-                    setActiveView('moderation');
-                    await fetchModeratorQuestions();
-                  } else {
-                    setActiveView('submit');
-                    alert('Please enter your new passkey into the submission box to access moderator mode.');
+                onNavigateToModeration={async (passkeyToUse?: string) => {
+                  const currentKey = passkeyToUse || localStorage.getItem('si_moderator_passkey') || '';
+                  if (currentKey) {
+                    const valid = await verifyPasskey(currentKey);
+                    if (valid) {
+                      setIsModerator(true);
+                      localStorage.setItem('si_is_moderator', 'true');
+                      setActiveView('moderation');
+                      await fetchModeratorQuestions();
+                      setModeratorBannerNotice('Moderator Mode Activated: Reviewer Portal');
+                      setTimeout(() => setModeratorBannerNotice(null), 5000);
+                      return;
+                    }
                   }
+                  setIsModeratorModalOpen(true);
                 }}
               />
             </motion.div>
           )}
         </AnimatePresence>
       </main>
+
+      {/* Moderator Login Modal */}
+      <ModeratorLoginModal
+        isOpen={isModeratorModalOpen}
+        onClose={() => setIsModeratorModalOpen(false)}
+        verifyPasskeyFn={verifyPasskey}
+        onSuccess={async (validKey) => {
+          setIsModerator(true);
+          localStorage.setItem('si_is_moderator', 'true');
+          setActiveView('moderation');
+          await fetchModeratorQuestions();
+          setModeratorBannerNotice('Moderator Mode Activated: Reviewer Portal');
+          setTimeout(() => setModeratorBannerNotice(null), 5000);
+        }}
+        onAdminTrigger={() => {
+          setInitialAdminAuth(true);
+          setActiveView('passkey_settings');
+          setModeratorBannerNotice('Master Security Console Activated: Authenticated with NiKo0709');
+          setTimeout(() => setModeratorBannerNotice(null), 5000);
+        }}
+      />
 
       {/* Footer */}
       <footer className="w-full max-w-7xl mx-auto px-4 sm:px-8 lg:px-12 py-3 sm:py-4 lg:py-6 text-[10px] sm:text-xs lg:text-sm font-black tracking-[0.18em] lg:tracking-[0.22em] text-stone-400 uppercase flex items-center justify-between z-20 shrink-0">

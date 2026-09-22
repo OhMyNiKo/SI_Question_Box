@@ -453,9 +453,9 @@ export const ADMIN_PASSKEY = 'NiKo0709';
 
 export function getLocalModeratorPasskey(): string {
   try {
-    return localStorage.getItem('si_moderator_passkey') || DEFAULT_MODERATOR_PASSKEY;
+    return localStorage.getItem('si_moderator_passkey') || '';
   } catch {
-    return DEFAULT_MODERATOR_PASSKEY;
+    return '';
   }
 }
 

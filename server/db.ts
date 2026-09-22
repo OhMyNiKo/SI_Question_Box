@@ -308,6 +308,8 @@ function loadLocalSettings(): AppSettings {
   };
 }
 
+let cachedAppSettings: AppSettings | null = null;
+
 function saveLocalSettings(settings: AppSettings): void {
   try {
     if (!fs.existsSync(DATA_DIR)) {
@@ -320,43 +322,35 @@ function saveLocalSettings(settings: AppSettings): void {
 }
 
 export async function getAppSettings(): Promise<AppSettings> {
+  if (cachedAppSettings) {
+    return cachedAppSettings;
+  }
+  const local = loadLocalSettings();
+  cachedAppSettings = local;
+
   const db = getDb();
   if (db) {
-    // 1. Primary: read from questions/_settings_security (covered by /questions/{id} rule)
-    try {
-      const snap = await withTimeout(getDoc(doc(db, 'questions', '_settings_security')), 2500);
-      if (snap.exists()) {
-        const data = snap.data();
-        if (data && typeof data.moderatorPasskey === 'string' && data.moderatorPasskey.trim()) {
-          return {
-            moderatorPasskey: data.moderatorPasskey.trim(),
-            updatedAt: data.updatedAt || new Date().toISOString(),
-            passkeyVersion: typeof data.passkeyVersion === 'number' ? data.passkeyVersion : 1,
-          };
+    // Non-blocking background sync from Firestore
+    (async () => {
+      try {
+        const snap = await withTimeout(getDoc(doc(db, 'questions', '_settings_security')), 1500);
+        if (snap.exists()) {
+          const data = snap.data();
+          if (data && typeof data.moderatorPasskey === 'string' && data.moderatorPasskey.trim()) {
+            cachedAppSettings = {
+              moderatorPasskey: data.moderatorPasskey.trim(),
+              updatedAt: data.updatedAt || new Date().toISOString(),
+              passkeyVersion: typeof data.passkeyVersion === 'number' ? data.passkeyVersion : 1,
+            };
+            saveLocalSettings(cachedAppSettings);
+          }
         }
+      } catch {
+        // ignore
       }
-    } catch {
-      // ignore
-    }
-
-    // 2. Secondary: try settings/moderator_security
-    try {
-      const docSnap = await withTimeout(getDoc(doc(db, 'settings', 'moderator_security')), 2500);
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        if (data && typeof data.moderatorPasskey === 'string' && data.moderatorPasskey.trim()) {
-          return {
-            moderatorPasskey: data.moderatorPasskey.trim(),
-            updatedAt: data.updatedAt || new Date().toISOString(),
-            passkeyVersion: typeof data.passkeyVersion === 'number' ? data.passkeyVersion : 1,
-          };
-        }
-      }
-    } catch {
-      // ignore
-    }
+    })();
   }
-  return loadLocalSettings();
+  return cachedAppSettings;
 }
 
 export async function getModeratorPasskey(): Promise<string> {
@@ -375,23 +369,24 @@ export async function setModeratorPasskey(newPasskey: string): Promise<AppSettin
     passkeyVersion: nextVersion,
   };
 
+  cachedAppSettings = settings;
+  saveLocalSettings(settings);
+
   const db = getDb();
   if (db) {
-    // 1. Save to questions/_settings_security (permitted under /questions/{id})
-    try {
-      await withTimeout(setDoc(doc(db, 'questions', '_settings_security'), settings), 2500);
-    } catch {
-      // ignore
-    }
-
-    // 2. Also try settings/moderator_security if /settings/ is allowed
-    try {
-      await withTimeout(setDoc(doc(db, 'settings', 'moderator_security'), settings), 2500);
-    } catch {
-      // ignore
-    }
+    (async () => {
+      try {
+        await withTimeout(setDoc(doc(db, 'questions', '_settings_security'), settings), 2500);
+      } catch {
+        // ignore
+      }
+      try {
+        await withTimeout(setDoc(doc(db, 'settings', 'moderator_security'), settings), 2500);
+      } catch {
+        // ignore
+      }
+    })();
   }
 
-  saveLocalSettings(settings);
   return settings;
 }

@@ -23,7 +23,7 @@ import {
 
 interface PasskeySettingsViewProps {
   onBackToSubmit: () => void;
-  onNavigateToModeration: () => void;
+  onNavigateToModeration: (passkeyToUse?: string) => void;
   initialAdminAuth?: boolean;
   onPasskeyUpdated?: (newKey: string) => void;
 }
@@ -467,7 +467,7 @@ export function PasskeySettingsView({
               </button>
 
               <button
-                onClick={onNavigateToModeration}
+                onClick={() => onNavigateToModeration(currentPasskey)}
                 id="test-moderator-link-btn"
                 className="inline-flex items-center gap-1.5 text-xs font-bold text-[#FF5030] hover:text-[#e04020] cursor-pointer"
               >
