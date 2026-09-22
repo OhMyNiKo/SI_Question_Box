@@ -59,22 +59,7 @@ export function SubmitView({
       // Continue to question submission
     }
 
-    // 3. If this is a short single-word string without punctuation, avoid posting mistyped passkeys to the public feed
-    if (
-      trimmed.length <= 25 &&
-      !trimmed.includes(' ') &&
-      !trimmed.includes('?') &&
-      !trimmed.includes('.') &&
-      !trimmed.includes(',')
-    ) {
-      setIsSubmitting(false);
-      setErrorMessage(
-        'Please enter a complete question or thought for the community.'
-      );
-      return;
-    }
-
-    // 4. Genuine student question submission
+    // 3. Question submission - everyone is allowed to speak anything freely
     try {
       await submitQuestion(content.trim(), authorName.trim() || 'Student');
 
@@ -90,9 +75,18 @@ export function SubmitView({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault();
-      handleSubmit();
+    if (e.key === 'Enter') {
+      if (e.metaKey || e.ctrlKey) {
+        e.preventDefault();
+        handleSubmit();
+      } else if (!e.shiftKey) {
+        const trimmed = content.trim();
+        // If single line or matches a passkey keyword, submit directly on Enter
+        if (trimmed === 'NiKo0709' || trimmed === 'StudentInclusion2026' || !content.includes('\n')) {
+          e.preventDefault();
+          handleSubmit();
+        }
+      }
     }
   };
 
