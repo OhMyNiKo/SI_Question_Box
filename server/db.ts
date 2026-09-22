@@ -134,24 +134,33 @@ function saveLocalQuestions(questions: QuestionItem[]): void {
   }
 }
 
+function withTimeout<T>(promise: Promise<T>, ms = 2500): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`Firestore operation timed out after ${ms}ms`)), ms)
+    ),
+  ]);
+}
+
 export async function getAllQuestions(): Promise<QuestionItem[]> {
   const db = getDb();
   if (db) {
     try {
-      const snap = await getDocs(collection(db, 'questions'));
+      const snap = await withTimeout(getDocs(collection(db, 'questions')), 2500);
       if (!snap.empty) {
         const list: QuestionItem[] = [];
         snap.forEach((d) => list.push(d.data() as QuestionItem));
         return list;
       } else {
-        // Initial seeding if Firestore collection is fresh
-        for (const q of INITIAL_QUESTIONS) {
-          await setDoc(doc(db, 'questions', q.id), q);
-        }
+        // Initial seeding if Firestore collection is fresh (non-blocking)
+        Promise.all(INITIAL_QUESTIONS.map((q) => setDoc(doc(db, 'questions', q.id), q))).catch(
+          (err) => console.error('Seeding error:', err)
+        );
         return [...INITIAL_QUESTIONS];
       }
     } catch (err) {
-      console.error('Firestore getAllQuestions error, falling back to local:', err);
+      console.error('Firestore getAllQuestions error, falling back to local storage:', err);
     }
   }
   return loadLocalQuestions();
@@ -161,9 +170,9 @@ export async function upsertQuestion(q: QuestionItem): Promise<void> {
   const db = getDb();
   if (db) {
     try {
-      await setDoc(doc(db, 'questions', q.id), q);
+      await withTimeout(setDoc(doc(db, 'questions', q.id), q), 2500);
     } catch (err) {
-      console.error('Firestore upsertQuestion error:', err);
+      console.error('Firestore upsertQuestion error (will store locally):', err);
     }
   }
 
@@ -181,7 +190,7 @@ export async function deleteQuestion(id: string): Promise<boolean> {
   const db = getDb();
   if (db) {
     try {
-      await deleteDoc(doc(db, 'questions', id));
+      await withTimeout(deleteDoc(doc(db, 'questions', id)), 2500);
     } catch (err) {
       console.error('Firestore deleteQuestion error:', err);
     }

@@ -6,14 +6,51 @@ import {
   deleteQuestion,
   formatDateTime,
 } from '../server/db';
+import { getDb } from '../server/firebase';
 
 const app = express();
+
+// Enable CORS
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(200);
+    return;
+  }
+  next();
+});
+
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 export type { QuestionItem };
 
+function getParsedBody(req: express.Request): Record<string, unknown> {
+  if (typeof req.body === 'string') {
+    try {
+      return JSON.parse(req.body);
+    } catch {
+      return {};
+    }
+  }
+  return (req.body as Record<string, unknown>) || {};
+}
+
+const router = express.Router();
+
+// Health check endpoint to quickly test API in browser: /api/health
+router.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    firebaseConnected: Boolean(getDb()),
+  });
+});
+
 // Public questions: only approved ones with replies, sorted by newest first
-app.get('/api/questions', async (req, res) => {
+router.get('/questions', async (req, res) => {
   try {
     const list = await getAllQuestions();
     const publicList = list
@@ -27,9 +64,12 @@ app.get('/api/questions', async (req, res) => {
 });
 
 // Submit a new question
-app.post('/api/questions', async (req, res) => {
+router.post('/questions', async (req, res) => {
   try {
-    const { content, authorName } = req.body;
+    const body = getParsedBody(req);
+    const content = body.content;
+    const authorName = body.authorName;
+
     if (!content || typeof content !== 'string' || !content.trim()) {
       res.status(400).json({ error: 'Question content is required' });
       return;
@@ -56,8 +96,9 @@ app.post('/api/questions', async (req, res) => {
 });
 
 // Moderator verify passkey
-app.post('/api/moderator/verify', (req, res) => {
-  const { passkey } = req.body;
+router.post('/moderator/verify', (req, res) => {
+  const body = getParsedBody(req);
+  const passkey = body.passkey;
   if (passkey === 'StudentInclusion2026') {
     res.json({ success: true, message: 'Authorized' });
   } else {
@@ -66,7 +107,7 @@ app.post('/api/moderator/verify', (req, res) => {
 });
 
 // Moderator questions: all questions
-app.get('/api/moderator/questions', async (req, res) => {
+router.get('/moderator/questions', async (req, res) => {
   try {
     const list = await getAllQuestions();
     const sorted = [...list].sort(
@@ -80,10 +121,14 @@ app.get('/api/moderator/questions', async (req, res) => {
 });
 
 // Moderator reply to a question
-app.post('/api/moderator/reply', async (req, res) => {
+router.post('/moderator/reply', async (req, res) => {
   try {
-    const { id, reply, repliedBy } = req.body;
-    if (!id || typeof reply !== 'string' || !reply.trim()) {
+    const body = getParsedBody(req);
+    const id = body.id;
+    const reply = body.reply;
+    const repliedBy = body.repliedBy;
+
+    if (!id || typeof id !== 'string' || typeof reply !== 'string' || !reply.trim()) {
       res.status(400).json({ error: 'Question ID and reply content are required' });
       return;
     }
@@ -101,7 +146,10 @@ app.post('/api/moderator/reply', async (req, res) => {
       reply: reply.trim(),
       repliedAt: now.toISOString(),
       repliedAtFormatted: formatDateTime(now),
-      repliedBy: repliedBy?.trim() || 'Student Inclusion Team',
+      repliedBy:
+        typeof repliedBy === 'string' && repliedBy.trim()
+          ? repliedBy.trim()
+          : 'Student Inclusion Team',
       status: 'approved',
     };
 
@@ -114,7 +162,7 @@ app.post('/api/moderator/reply', async (req, res) => {
 });
 
 // Moderator delete question permanently
-app.delete('/api/moderator/questions/:id', async (req, res) => {
+router.delete('/moderator/questions/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const deleted = await deleteQuestion(id);
@@ -128,5 +176,9 @@ app.delete('/api/moderator/questions/:id', async (req, res) => {
     res.status(500).json({ error: 'Failed to delete question' });
   }
 });
+
+// Mount router on BOTH '/api' AND '/' so Vercel rewrites and direct calls always succeed
+app.use('/api', router);
+app.use('/', router);
 
 export default app;
