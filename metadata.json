@@ -1,0 +1,6 @@
+{
+  "name": "Student Inclusion Anonymous Box",
+  "description": "Official anonymous question box for Student Inclusion with public feedback stream and moderation portal.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
