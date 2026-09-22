@@ -125,8 +125,8 @@ export function PublicFeedView({
               <div className="px-4 py-2.5 bg-[#F8F6F0] border-b-2 border-[#0D1527] flex items-center justify-between gap-2 shrink-0">
                 <div className="flex items-center gap-1.5">
                   <span className="w-2.5 h-2.5 rounded-full bg-[#FF5030]"></span>
-                  <span className="text-[11px] font-black uppercase tracking-wider text-[#0D1527]">
-                    Student
+                  <span className="text-[11px] font-black uppercase tracking-wider text-[#0D1527] truncate max-w-[130px]">
+                    {q.authorName || 'Student'}
                   </span>
                 </div>
 

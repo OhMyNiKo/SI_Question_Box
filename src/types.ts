@@ -9,6 +9,7 @@ export interface QuestionItem {
   repliedBy?: string;
   status: 'pending' | 'approved';
   category?: string;
+  authorName?: string;
 }
 
 export type ActiveView = 'submit' | 'public_feed' | 'moderation';

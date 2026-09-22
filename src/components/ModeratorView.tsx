@@ -336,8 +336,13 @@ export function ModeratorView({
                 {/* Question Body */}
                 <div className="p-4 sm:p-5 flex-1 flex flex-col justify-between">
                   <div className="mb-4">
-                    <div className="text-[10px] uppercase font-black tracking-wider text-stone-400 mb-1.5">
-                      Student Anonymous Message:
+                    <div className="flex items-center justify-between text-[10px] uppercase font-black tracking-wider text-stone-400 mb-1.5">
+                      <span>
+                        Message from:{' '}
+                        <strong className="text-[#0D1527] normal-case font-bold">
+                          {q.authorName || 'Student'}
+                        </strong>
+                      </span>
                     </div>
                     <div className="p-3.5 sm:p-4 rounded-2xl bg-[#F8F6F0] text-[#0D1527] text-sm leading-relaxed border border-[#E7DFCE] font-medium">
                       {q.content}
@@ -385,7 +390,13 @@ export function ModeratorView({
                         className="px-4 py-2 bg-[#0D1527] hover:bg-stone-800 disabled:opacity-30 disabled:cursor-not-allowed text-white text-xs font-bold rounded-full flex items-center gap-1.5 transition-colors cursor-pointer ml-auto"
                       >
                         <Send className="w-3.5 h-3.5 text-[#FF8C73]" />
-                        <span>{isSubmitting ? 'Publishing...' : q.status === 'approved' ? 'Update Reply' : 'Publish Reply'}</span>
+                        <span>
+                          {isSubmitting
+                            ? 'Publishing...'
+                            : q.status === 'approved'
+                            ? 'Update Reply'
+                            : 'Publish Reply'}
+                        </span>
                       </button>
                     </div>
                   </div>

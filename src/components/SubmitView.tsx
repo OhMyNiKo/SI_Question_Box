@@ -5,6 +5,7 @@ import {
   ShieldCheck,
   ArrowRight,
   Check,
+  User,
 } from 'lucide-react';
 
 interface SubmitViewProps {
@@ -20,6 +21,7 @@ export function SubmitView({
   onNavigateToFeed,
 }: SubmitViewProps) {
   const [content, setContent] = useState('');
+  const [authorName, setAuthorName] = useState('Student');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submittedSuccess, setSubmittedSuccess] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -42,7 +44,10 @@ export function SubmitView({
       const res = await fetch('/api/questions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: content.trim() }),
+        body: JSON.stringify({
+          content: content.trim(),
+          authorName: authorName.trim() || 'Student',
+        }),
       });
 
       if (!res.ok) {
@@ -141,6 +146,29 @@ export function SubmitView({
 
               {/* Main Form */}
               <form onSubmit={handleSubmit}>
+                {/* Customizable Name Enter Box Row - Slim / Low Profile */}
+                <div className="flex items-center gap-2 mb-2 sm:mb-2.5 py-1.5 px-2.5 sm:py-1.5 sm:px-3 rounded-xl bg-[#F8F6F0] border-2 border-[#0D1527]/15">
+                  <User className="w-3.5 h-3.5 text-stone-500 shrink-0" />
+                  <label
+                    htmlFor="custom-author-name-input"
+                    className="text-[10px] sm:text-[11px] font-black uppercase tracking-wider text-stone-600 shrink-0"
+                  >
+                    From:
+                  </label>
+                  <input
+                    type="text"
+                    id="custom-author-name-input"
+                    maxLength={20}
+                    value={authorName}
+                    onChange={(e) => setAuthorName(e.target.value)}
+                    placeholder="Student"
+                    className="bg-white border border-[#0D1527]/25 rounded-lg px-2 py-0.5 text-xs font-bold text-[#0D1527] placeholder:text-stone-400 focus:outline-none focus:border-[#0D1527] w-full max-w-[150px] sm:max-w-[170px] transition-colors"
+                  />
+                  <span className="text-[10px] sm:text-[11px] font-mono font-bold text-stone-400 ml-auto shrink-0">
+                    ({authorName.length}/20)
+                  </span>
+                </div>
+
                 <div className="relative mb-2.5 sm:mb-3 lg:mb-4">
                   <textarea
                     id="anonymous-question-input"
@@ -149,7 +177,7 @@ export function SubmitView({
                     value={content}
                     onChange={(e) => setContent(e.target.value)}
                     onKeyDown={handleKeyDown}
-                    placeholder="Type freely. No name is attached to your message..."
+                    placeholder="Type freely. Ask a question or share a thought for the community..."
                     className="w-full resize-none p-3.5 sm:p-4 md:p-4 lg:p-5 rounded-[16px] sm:rounded-[20px] lg:rounded-[24px] bg-[#F8F6F0] border-2 border-[#0D1527] focus:bg-white focus:outline-none transition-all text-[#0D1527] placeholder:text-stone-400 text-xs sm:text-sm md:text-sm lg:text-base leading-relaxed min-h-[110px] sm:min-h-[130px] md:min-h-[145px] lg:min-h-[175px]"
                   />
                 </div>
