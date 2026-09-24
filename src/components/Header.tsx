@@ -8,6 +8,7 @@ interface HeaderProps {
   isModerator: boolean;
   onLogoutModerator: () => void;
   publicCount: number;
+  onOpenModeratorLogin?: () => void;
 }
 
 export function Header({
@@ -15,6 +16,7 @@ export function Header({
   setActiveView,
   isModerator,
   onLogoutModerator,
+  onOpenModeratorLogin,
 }: HeaderProps) {
   return (
     <header className="w-full max-w-7xl mx-auto px-4 sm:px-8 lg:px-12 pt-4 pb-2 lg:pt-8 lg:pb-3 flex items-center justify-between z-20 relative shrink-0">
@@ -72,7 +74,7 @@ export function Header({
         </motion.button>
 
         <AnimatePresence>
-          {isModerator && (
+          {isModerator ? (
             <motion.div
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -102,6 +104,21 @@ export function Header({
                 <LogOut className="w-3.5 h-3.5" />
               </motion.button>
             </motion.div>
+          ) : (
+            onOpenModeratorLogin && (
+              <motion.button
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                whileTap={{ scale: 0.94 }}
+                id="nav-moderator-login-btn"
+                onClick={onOpenModeratorLogin}
+                title="Staff & Moderator Access"
+                className="px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-full text-xs font-bold text-stone-500 hover:text-[#0D1527] hover:bg-stone-100 border border-stone-200 hover:border-stone-400 flex items-center gap-1.5 transition-all cursor-pointer"
+              >
+                <Lock className="w-3 h-3 text-[#FF5030]" />
+                <span>Moderator<span className="hidden sm:inline"> Access</span></span>
+              </motion.button>
+            )
           )}
         </AnimatePresence>
       </div>

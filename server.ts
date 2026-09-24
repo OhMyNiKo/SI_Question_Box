@@ -344,19 +344,70 @@ Output ONLY valid JSON without markdown wrapping.`;
   });
 
   // Moderator verify passkey (strictly checks active passkey and returns session version)
+  // Moderator verify passkey (strictly checks active passkey and returns session version)
   app.post('/api/moderator/verify', async (req, res) => {
     try {
       const { passkey } = req.body;
-      const settings = await getAppSettings();
-      if (passkey && passkey.trim() === settings.moderatorPasskey) {
+      if (!passkey || typeof passkey !== 'string' || !passkey.trim()) {
+        res.status(400).json({ success: false, error: 'Passkey is required' });
+        return;
+      }
+
+      const cleanKey = passkey.trim();
+      let settings = await getAppSettings();
+
+      const matchesCache =
+        cleanKey === settings.moderatorPasskey ||
+        cleanKey.toLowerCase() === settings.moderatorPasskey.toLowerCase();
+
+      // If it doesn't match the cache, immediately check fresh from Firestore
+      // so any device that updated the passkey is honored across all Cloud Run containers
+      if (!matchesCache) {
+        settings = await getAppSettings({ forceFresh: true });
+      }
+
+      const isMatch =
+        cleanKey === settings.moderatorPasskey ||
+        cleanKey.toLowerCase() === settings.moderatorPasskey.toLowerCase();
+
+      if (isMatch) {
         res.json({
           success: true,
           message: 'Authorized',
           passkeyVersion: settings.passkeyVersion,
         });
-      } else {
-        res.status(401).json({ success: false, error: 'Invalid passkey' });
+        return;
       }
+
+      // Check if user entered master admin passkey
+      if (
+        cleanKey === ADMIN_PASSKEY ||
+        cleanKey.toLowerCase() === ADMIN_PASSKEY.toLowerCase()
+      ) {
+        res.json({
+          success: true,
+          isAdmin: true,
+          message: 'Admin authorized',
+          passkeyVersion: settings.passkeyVersion,
+        });
+        return;
+      }
+
+      // Check if user entered the old default passkey while it was rotated
+      if (
+        cleanKey.toLowerCase() === 'studentinclusion2026' &&
+        settings.moderatorPasskey.toLowerCase() !== 'studentinclusion2026'
+      ) {
+        res.status(401).json({
+          success: false,
+          error: 'passkey_was_updated',
+          message:
+            'The moderator passkey was updated by the team. Please use the newly updated passkey or check with an administrator.',
+        });
+        return;
+      }
+
+      res.status(401).json({ success: false, error: 'Invalid passkey' });
     } catch (err) {
       console.error('Error verifying moderator passkey:', err);
       res.status(500).json({ success: false, error: 'Verification error' });
@@ -366,7 +417,7 @@ Output ONLY valid JSON without markdown wrapping.`;
   // Session check endpoint: devices verify if their active moderator session is still current
   app.get('/api/moderator/session-check', async (req, res) => {
     try {
-      const settings = await getAppSettings();
+      const settings = await getAppSettings({ forceFresh: true });
       res.json({
         success: true,
         passkeyVersion: settings.passkeyVersion,
@@ -381,8 +432,14 @@ Output ONLY valid JSON without markdown wrapping.`;
   app.post('/api/admin/verify', async (req, res) => {
     try {
       const { adminPasskey } = req.body;
-      if (adminPasskey && adminPasskey.trim() === ADMIN_PASSKEY) {
-        const settings = await getAppSettings();
+      const isAdminValid =
+        adminPasskey &&
+        typeof adminPasskey === 'string' &&
+        (adminPasskey.trim() === ADMIN_PASSKEY ||
+          adminPasskey.trim().toLowerCase() === ADMIN_PASSKEY.toLowerCase());
+
+      if (isAdminValid) {
+        const settings = await getAppSettings({ forceFresh: true });
         res.json({
           success: true,
           message: 'Admin authorized',
@@ -402,8 +459,14 @@ Output ONLY valid JSON without markdown wrapping.`;
   app.post('/api/admin/get-passkey', async (req, res) => {
     try {
       const { adminPasskey } = req.body;
-      if (adminPasskey && adminPasskey.trim() === ADMIN_PASSKEY) {
-        const settings = await getAppSettings();
+      const isAdminValid =
+        adminPasskey &&
+        typeof adminPasskey === 'string' &&
+        (adminPasskey.trim() === ADMIN_PASSKEY ||
+          adminPasskey.trim().toLowerCase() === ADMIN_PASSKEY.toLowerCase());
+
+      if (isAdminValid) {
+        const settings = await getAppSettings({ forceFresh: true });
         res.json({
           success: true,
           currentModeratorPasskey: settings.moderatorPasskey,
@@ -422,7 +485,13 @@ Output ONLY valid JSON without markdown wrapping.`;
   app.post('/api/admin/update-passkey', async (req, res) => {
     try {
       const { adminPasskey, newPasskey } = req.body;
-      if (!adminPasskey || adminPasskey.trim() !== ADMIN_PASSKEY) {
+      const isAdminValid =
+        adminPasskey &&
+        typeof adminPasskey === 'string' &&
+        (adminPasskey.trim() === ADMIN_PASSKEY ||
+          adminPasskey.trim().toLowerCase() === ADMIN_PASSKEY.toLowerCase());
+
+      if (!isAdminValid) {
         res.status(401).json({ success: false, error: 'Unauthorized: Invalid admin passkey' });
         return;
       }
@@ -440,8 +509,9 @@ Output ONLY valid JSON without markdown wrapping.`;
 
       const updatedSettings = await setModeratorPasskey(trimmed);
 
-      // Instantly broadcast logout to ALL devices connected to the SSE stream!
+      // Instantly broadcast logout and sync to ALL devices connected to the SSE stream!
       broadcastPasskeyChanged(updatedSettings.passkeyVersion);
+      await broadcastQuestions();
 
       res.json({
         success: true,

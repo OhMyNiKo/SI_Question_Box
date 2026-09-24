@@ -5,6 +5,7 @@ import { SubmitView } from './components/SubmitView';
 import { PublicFeedView } from './components/PublicFeedView';
 import { ModeratorView } from './components/ModeratorView';
 import { PasskeySettingsView } from './components/PasskeySettingsView';
+import { ModeratorLoginModal } from './components/ModeratorLoginModal';
 import { QuestionItem, ActiveView } from './types';
 import {
   getPublicQuestions,
@@ -22,6 +23,8 @@ export default function App() {
     return localStorage.getItem('si_is_moderator') === 'true';
   });
   const [initialAdminAuth, setInitialAdminAuth] = useState(false);
+  const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
+  const [loginModalPrefill, setLoginModalPrefill] = useState('');
 
   const [publicQuestions, setPublicQuestions] = useState<QuestionItem[]>([]);
   const [allModeratorQuestions, setAllModeratorQuestions] = useState<QuestionItem[]>([]);
@@ -122,6 +125,7 @@ export default function App() {
   const handleTriggerModerator = async (passkey: string) => {
     setIsModerator(true);
     localStorage.setItem('si_is_moderator', 'true');
+    localStorage.setItem('si_moderator_passkey', passkey.trim());
     setActiveView('moderation');
     await fetchModeratorQuestions();
     setModeratorBannerNotice('Moderator Mode Activated: Reviewer Portal');
@@ -173,6 +177,19 @@ export default function App() {
         isModerator={isModerator}
         onLogoutModerator={handleLogoutModerator}
         publicCount={publicQuestions.length}
+        onOpenModeratorLogin={() => {
+          setLoginModalPrefill('');
+          setIsLoginModalOpen(true);
+        }}
+      />
+
+      {/* Moderator Login Modal */}
+      <ModeratorLoginModal
+        isOpen={isLoginModalOpen}
+        onClose={() => setIsLoginModalOpen(false)}
+        prefilledPasskey={loginModalPrefill}
+        onLoginSuccess={handleTriggerModerator}
+        onOpenAdminConsole={handleTriggerAdminPasskey}
       />
 
       {/* Moderator Notification Toast */}
@@ -211,6 +228,10 @@ export default function App() {
                 onTriggerAdminPasskey={handleTriggerAdminPasskey}
                 onNavigateToFeed={() => setActiveView('public_feed')}
                 publicCount={publicQuestions.length}
+                onOpenModeratorLogin={(prefill) => {
+                  setLoginModalPrefill(prefill || '');
+                  setIsLoginModalOpen(true);
+                }}
               />
             </motion.div>
           )}

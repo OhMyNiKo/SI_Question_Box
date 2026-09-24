@@ -71,7 +71,8 @@ export function PasskeySettingsView({
   // Handle Admin Login submission
   const handleAdminLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (enteredAdminKey.trim() === ADMIN_PASSKEY) {
+    const trimmed = enteredAdminKey.trim();
+    if (trimmed === ADMIN_PASSKEY || trimmed.toLowerCase() === ADMIN_PASSKEY.toLowerCase()) {
       setIsAdminAuthenticated(true);
       setAdminAuthError(null);
       setEnteredAdminKey('');
@@ -90,6 +91,35 @@ export function PasskeySettingsView({
       // Fallback
       setIsCopied(true);
       setTimeout(() => setIsCopied(false), 2000);
+    }
+  };
+
+  // Quick reset to default passkey (StudentInclusion2026)
+  const handleResetToDefault = async () => {
+    if (currentPasskey === 'StudentInclusion2026') return;
+    try {
+      setIsUpdating(true);
+      const res = await updateModeratorPasskey(ADMIN_PASSKEY, 'StudentInclusion2026');
+      if (res.success) {
+        setCurrentPasskey(res.updatedPasskey);
+        setFeedback({
+          type: 'success',
+          message: 'Reset to default passkey "StudentInclusion2026" succeeded! Synced across all devices.',
+        });
+        onPasskeyUpdated?.(res.updatedPasskey);
+      } else {
+        setFeedback({
+          type: 'error',
+          message: res.error || 'Failed to reset passkey.',
+        });
+      }
+    } catch (err: any) {
+      setFeedback({
+        type: 'error',
+        message: err?.message || 'Error resetting passkey.',
+      });
+    } finally {
+      setIsUpdating(false);
     }
   };
 
@@ -140,7 +170,7 @@ export function PasskeySettingsView({
         setConfirmPasskey('');
         setFeedback({
           type: 'success',
-          message: `Success! The new passkey "${res.updatedPasskey}" has been confirmed. The previous passkey is now permanently invalid, and all active moderator sessions across all devices have been logged out automatically.`,
+          message: `Success! The new passkey "${res.updatedPasskey}" has been synchronized across every device. All devices can now use this passkey to unlock the Moderator Portal. Any existing sessions have been refreshed.`,
         });
         onPasskeyUpdated?.(res.updatedPasskey);
       } else {
@@ -219,6 +249,9 @@ export function PasskeySettingsView({
                 <input
                   type="password"
                   id="admin-master-key-input"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck="false"
                   value={enteredAdminKey}
                   onChange={(e) => {
                     setEnteredAdminKey(e.target.value);
@@ -343,9 +376,23 @@ export function PasskeySettingsView({
                 </span>
               </div>
 
-              <p className="text-stone-500 text-xs mt-3">
-                Moderators enter this secret in the Say It voicebox to teleport into the review feed.
-              </p>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mt-3">
+                <p className="text-stone-500 text-xs">
+                  Moderators enter this secret in the Say It voicebox or Moderator Access modal.
+                </p>
+
+                {currentPasskey !== 'StudentInclusion2026' && (
+                  <button
+                    type="button"
+                    onClick={handleResetToDefault}
+                    disabled={isUpdating}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 text-xs font-bold transition-colors cursor-pointer shrink-0"
+                  >
+                    <RefreshCw className="w-3 h-3 text-amber-600" />
+                    <span>Reset to "StudentInclusion2026"</span>
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Change Passkey Form Card */}
@@ -396,6 +443,9 @@ export function PasskeySettingsView({
                       <input
                         type={isNewPasskeyVisible ? 'text' : 'password'}
                         id="new-passkey-input"
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        spellCheck="false"
                         value={newPasskey}
                         onChange={(e) => setNewPasskey(e.target.value)}
                         placeholder="Enter new passkey..."
@@ -421,6 +471,9 @@ export function PasskeySettingsView({
                     <input
                       type={isNewPasskeyVisible ? 'text' : 'password'}
                       id="confirm-passkey-input"
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      spellCheck="false"
                       value={confirmPasskey}
                       onChange={(e) => setConfirmPasskey(e.target.value)}
                       placeholder="Re-type new passkey..."

@@ -7,8 +7,10 @@ import {
   ArrowRight,
   Check,
   User,
+  Lock,
+  AlertCircle,
 } from 'lucide-react';
-import { submitQuestion, verifyPasskey } from '../services/questionsService';
+import { submitQuestion, verifyPasskey, verifyPasskeyDetailed } from '../services/questionsService';
 
 interface SubmitViewProps {
   onQuestionSubmitted: () => void;
@@ -16,6 +18,7 @@ interface SubmitViewProps {
   onTriggerAdminPasskey: () => void;
   onNavigateToFeed: () => void;
   publicCount: number;
+  onOpenModeratorLogin?: (prefill?: string) => void;
 }
 
 export function SubmitView({
@@ -23,45 +26,21 @@ export function SubmitView({
   onTriggerModerator,
   onTriggerAdminPasskey,
   onNavigateToFeed,
+  onOpenModeratorLogin,
 }: SubmitViewProps) {
   const [content, setContent] = useState('');
   const [authorName, setAuthorName] = useState('Student');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submittedSuccess, setSubmittedSuccess] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [suspectedPasskey, setSuspectedPasskey] = useState<string | null>(null);
 
-  const handleSubmit = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!content.trim() || isSubmitting) return;
-
-    const trimmed = content.trim();
-
-    // 1. Check for Admin Master Key trigger ("NiKo0709") to open the Passkey Settings page
-    if (trimmed === 'NiKo0709') {
-      onTriggerAdminPasskey();
-      setContent('');
-      return;
-    }
-
-    // 2. Check for secret moderator passkey trigger (e.g. initial 'StudentInclusion2026' or updated passkey)
+  const actuallySubmitAsQuestion = async (textToSubmit: string) => {
     setIsSubmitting(true);
     setErrorMessage(null);
-
+    setSuspectedPasskey(null);
     try {
-      const isMod = await verifyPasskey(trimmed);
-      if (isMod) {
-        onTriggerModerator(trimmed);
-        setContent('');
-        setIsSubmitting(false);
-        return;
-      }
-    } catch {
-      // Continue to question submission
-    }
-
-    // 3. Question submission - everyone is allowed to speak anything freely
-    try {
-      await submitQuestion(content.trim(), authorName.trim() || 'Student');
+      await submitQuestion(textToSubmit.trim(), authorName.trim() || 'Student');
 
       setContent('');
       setSubmittedSuccess(true);
@@ -74,6 +53,73 @@ export function SubmitView({
     }
   };
 
+  const handleSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!content.trim() || isSubmitting) return;
+
+    const trimmed = content.trim();
+
+    // 1. Check for Admin Master Key trigger ("NiKo0709" - case-insensitive)
+    if (trimmed === 'NiKo0709' || trimmed.toLowerCase() === 'niko0709') {
+      onTriggerAdminPasskey();
+      setContent('');
+      setSuspectedPasskey(null);
+      return;
+    }
+
+    // 2. Check for secret moderator passkey trigger
+    setIsSubmitting(true);
+    setErrorMessage(null);
+
+    try {
+      const res = await verifyPasskeyDetailed(trimmed);
+      if (res.isAdmin) {
+        onTriggerAdminPasskey();
+        setContent('');
+        setSuspectedPasskey(null);
+        setIsSubmitting(false);
+        return;
+      }
+      if (res.isValid) {
+        onTriggerModerator(trimmed);
+        setContent('');
+        setSuspectedPasskey(null);
+        setIsSubmitting(false);
+        return;
+      }
+      if (res.isOldDefaultPasskey) {
+        setSuspectedPasskey(trimmed);
+        setErrorMessage(
+          'Notice: The moderator passkey was changed from "StudentInclusion2026". Please use the newly updated team passkey, or access Passkey Settings (NiKo0709).'
+        );
+        setIsSubmitting(false);
+        return;
+      }
+    } catch {
+      // ignore
+    } finally {
+      setIsSubmitting(false);
+    }
+
+    // 3. Prevent accidental question submission if user was attempting a passkey or admin command!
+    const isSingleShortToken = !trimmed.includes(' ') && !trimmed.includes('\n') && trimmed.length <= 40;
+    const looksLikePasskeyAttempt =
+      isSingleShortToken ||
+      /^si\d*$/i.test(trimmed) ||
+      trimmed.toLowerCase().includes('passkey') ||
+      trimmed.toLowerCase().includes('password') ||
+      trimmed.toLowerCase().includes('studentinclusion') ||
+      trimmed.toLowerCase().includes('niko');
+
+    if (looksLikePasskeyAttempt) {
+      setSuspectedPasskey(trimmed);
+      return;
+    }
+
+    // 4. Regular question submission
+    await actuallySubmitAsQuestion(trimmed);
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter') {
       if (e.metaKey || e.ctrlKey) {
@@ -82,7 +128,11 @@ export function SubmitView({
       } else if (!e.shiftKey) {
         const trimmed = content.trim();
         // If single line or matches a passkey keyword, submit directly on Enter
-        if (trimmed === 'NiKo0709' || trimmed === 'StudentInclusion2026' || !content.includes('\n')) {
+        if (
+          trimmed.toLowerCase() === 'niko0709' ||
+          trimmed.toLowerCase() === 'studentinclusion2026' ||
+          !content.includes('\n')
+        ) {
           e.preventDefault();
           handleSubmit();
         }
@@ -264,6 +314,84 @@ export function SubmitView({
                   )}
                 </AnimatePresence>
 
+                <AnimatePresence>
+                  {suspectedPasskey && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0, y: -4 }}
+                      animate={{ opacity: 1, height: 'auto', y: 0 }}
+                      exit={{ opacity: 0, height: 0, y: -4 }}
+                      className="mb-4 p-3.5 sm:p-4 rounded-xl bg-amber-50 border-2 border-amber-300 text-amber-900 text-xs sm:text-sm overflow-hidden"
+                    >
+                      <div className="flex items-start gap-2 mb-1.5 font-bold">
+                        <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                        <span>
+                          {suspectedPasskey.toLowerCase() === 'studentinclusion2026'
+                            ? 'Default Passkey Changed'
+                            : `Secret Passkey Detected: "${suspectedPasskey}"`}
+                        </span>
+                      </div>
+                      <p className="text-stone-700 text-xs mb-3 leading-relaxed">
+                        {suspectedPasskey.toLowerCase() === 'studentinclusion2026' ? (
+                          <>
+                            The moderator passkey was changed from <strong>StudentInclusion2026</strong>. If you are an administrator, you can view or reset the passkey using the master key <strong>NiKo0709</strong>.
+                          </>
+                        ) : suspectedPasskey.toLowerCase().includes('niko') ? (
+                          <>
+                            Did you mean to open the restricted Admin Security Console? The master key is <strong>NiKo0709</strong>.
+                          </>
+                        ) : (
+                          <>
+                            Were you trying to enter the <strong>Moderator Passkey</strong>? To protect security, we prevented submitting this secret code as a public question. If the passkey was recently changed on another device, check the new passkey or open Moderator Login below.
+                          </>
+                        )}
+                      </p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onOpenModeratorLogin?.(suspectedPasskey);
+                            setSuspectedPasskey(null);
+                          }}
+                          className="px-3 py-1.5 bg-[#0D1527] hover:bg-[#1A243D] text-white rounded-lg text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs"
+                        >
+                          <Lock className="w-3.5 h-3.5 text-[#FF5030]" />
+                          <span>Try Moderator Login</span>
+                        </button>
+
+                        {(suspectedPasskey.toLowerCase().includes('niko') ||
+                          suspectedPasskey.toLowerCase() === 'studentinclusion2026') && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onTriggerAdminPasskey();
+                              setSuspectedPasskey(null);
+                            }}
+                            className="px-3 py-1.5 bg-[#FF5030] hover:bg-[#E03D1F] text-white rounded-lg text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs"
+                          >
+                            <ShieldCheck className="w-3.5 h-3.5 text-white" />
+                            <span>Open Admin Console</span>
+                          </button>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => actuallySubmitAsQuestion(suspectedPasskey)}
+                          className="px-3 py-1.5 bg-stone-200 hover:bg-stone-300 text-stone-800 rounded-lg text-xs font-bold cursor-pointer"
+                        >
+                          Submit as Question
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSuspectedPasskey(null)}
+                          className="px-2 py-1.5 text-stone-500 hover:text-stone-800 text-xs font-medium cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
                 {/* Blue/Periwinkle TIP box */}
                 <div
                   id="moderation-tips-notice"
@@ -277,6 +405,25 @@ export function SubmitView({
                   </p>
                 </div>
               </form>
+
+              {/* Moderator Access Footer Link */}
+              <div className="mt-3.5 pt-3 border-t border-stone-100 flex items-center justify-between text-xs text-stone-500">
+                <button
+                  type="button"
+                  onClick={() => onOpenModeratorLogin?.(content.trim())}
+                  className="inline-flex items-center gap-1.5 font-bold text-stone-600 hover:text-[#0D1527] transition-colors cursor-pointer"
+                >
+                  <Lock className="w-3.5 h-3.5 text-[#FF5030]" />
+                  <span>Moderator Access (Enter Passkey)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={onTriggerAdminPasskey}
+                  className="text-stone-400 hover:text-stone-600 text-[11px] font-semibold transition-colors cursor-pointer"
+                >
+                  Passkey Settings
+                </button>
+              </div>
             </div>
           </div>
         </div>

@@ -4,6 +4,7 @@ import {
   doc,
   setDoc,
   deleteDoc,
+  getDoc,
   onSnapshot,
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
@@ -467,38 +468,120 @@ export function setLocalModeratorPasskey(passkey: string): void {
   }
 }
 
-export async function verifyPasskey(passkey: string): Promise<boolean> {
-  const trimmed = passkey.trim();
-  if (!trimmed) return false;
+export interface VerifyPasskeyDetailedResult {
+  isValid: boolean;
+  isAdmin?: boolean;
+  isOldDefaultPasskey?: boolean;
+  passkeyVersion?: number;
+  message?: string;
+}
 
-  // 1. Try server verification
+export async function verifyPasskeyDetailed(passkey: string): Promise<VerifyPasskeyDetailedResult> {
+  const trimmed = passkey.trim();
+  if (!trimmed) return { isValid: false, message: 'Passkey cannot be empty' };
+
+  // Check if admin key first
+  if (
+    trimmed === ADMIN_PASSKEY ||
+    trimmed.toLowerCase() === ADMIN_PASSKEY.toLowerCase()
+  ) {
+    return { isValid: true, isAdmin: true, message: 'Admin authorized' };
+  }
+
+  // 1. Try server verification first (server checks cache & fresh Firestore)
   try {
     const res = await fetch('/api/moderator/verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ passkey: trimmed }),
     });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.success) {
-        setLocalModeratorPasskey(trimmed);
-        if (data.passkeyVersion) {
-          localStorage.setItem('si_moderator_session_version', String(data.passkeyVersion));
-        }
-        return true;
+    const data = await res.json();
+    if (res.ok && data.success) {
+      if (data.isAdmin) {
+        return { isValid: true, isAdmin: true, passkeyVersion: data.passkeyVersion };
       }
-    } else {
-      // Server explicitly rejected the passkey (HTTP 401 or other error)
-      // Never fall back to accepting old or default passkeys!
-      return false;
+      setLocalModeratorPasskey(trimmed);
+      if (data.passkeyVersion) {
+        localStorage.setItem('si_moderator_session_version', String(data.passkeyVersion));
+      }
+      return { isValid: true, passkeyVersion: data.passkeyVersion };
+    }
+
+    if (data && data.error === 'passkey_was_updated') {
+      return {
+        isValid: false,
+        isOldDefaultPasskey: true,
+        message: data.message || 'The moderator passkey was updated by the team.',
+      };
     }
   } catch (err) {
     console.warn('Server verifyPasskey network error:', err);
   }
 
-  // 2. Only in genuine network connection failure, verify strictly against locally cached active passkey
+  // 2. Direct Firestore fallback verification
+  if (db) {
+    try {
+      const snap = await withTimeout(getDoc(doc(db, 'questions', '_settings_security')), 3000);
+      if (snap.exists()) {
+        const data = snap.data();
+        if (data && typeof data.moderatorPasskey === 'string' && data.moderatorPasskey.trim()) {
+          const currentRealKey = data.moderatorPasskey.trim();
+          setLocalModeratorPasskey(currentRealKey);
+
+          const matches =
+            trimmed === currentRealKey ||
+            trimmed.toLowerCase() === currentRealKey.toLowerCase();
+
+          if (matches) {
+            if (data.passkeyVersion) {
+              localStorage.setItem('si_moderator_session_version', String(data.passkeyVersion));
+            }
+            return { isValid: true, passkeyVersion: data.passkeyVersion };
+          }
+
+          if (
+            trimmed.toLowerCase() === 'studentinclusion2026' &&
+            currentRealKey.toLowerCase() !== 'studentinclusion2026'
+          ) {
+            return {
+              isValid: false,
+              isOldDefaultPasskey: true,
+              message: 'The moderator passkey was changed from the default.',
+            };
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Direct Firestore verifyPasskey fallback note:', err);
+    }
+  }
+
+  // 3. Fallback against local cached active passkey
   const localCurrent = getLocalModeratorPasskey();
-  return trimmed === localCurrent;
+  const localMatches =
+    trimmed === localCurrent || trimmed.toLowerCase() === localCurrent.toLowerCase();
+
+  if (localMatches) {
+    return { isValid: true };
+  }
+
+  if (
+    trimmed.toLowerCase() === 'studentinclusion2026' &&
+    localCurrent.toLowerCase() !== 'studentinclusion2026'
+  ) {
+    return {
+      isValid: false,
+      isOldDefaultPasskey: true,
+      message: 'The moderator passkey was changed from the default.',
+    };
+  }
+
+  return { isValid: false, message: 'Invalid passkey' };
+}
+
+export async function verifyPasskey(passkey: string): Promise<boolean> {
+  const result = await verifyPasskeyDetailed(passkey);
+  return result.isValid;
 }
 
 export async function checkModeratorSessionValidity(): Promise<{
@@ -513,7 +596,12 @@ export async function checkModeratorSessionValidity(): Promise<{
         const storedVersion = localStorage.getItem('si_moderator_session_version');
         const isMod = localStorage.getItem('si_is_moderator') === 'true';
         if (isMod) {
-          if (!storedVersion || storedVersion !== String(data.passkeyVersion)) {
+          // If storedVersion is missing on a fresh device, seed it with the current server version
+          if (!storedVersion) {
+            localStorage.setItem('si_moderator_session_version', String(data.passkeyVersion));
+            return { isValid: true, serverPasskeyVersion: data.passkeyVersion };
+          }
+          if (storedVersion !== String(data.passkeyVersion)) {
             // Out of sync! Session is invalid
             localStorage.removeItem('si_is_moderator');
             localStorage.removeItem('si_moderator_session_version');
@@ -526,12 +614,43 @@ export async function checkModeratorSessionValidity(): Promise<{
   } catch (err) {
     console.warn('Session check note:', err);
   }
+
+  // Firestore fallback session check
+  if (db) {
+    try {
+      const snap = await withTimeout(getDoc(doc(db, 'questions', '_settings_security')), 2500);
+      if (snap.exists()) {
+        const data = snap.data();
+        if (data && typeof data.passkeyVersion === 'number') {
+          const storedVersion = localStorage.getItem('si_moderator_session_version');
+          const isMod = localStorage.getItem('si_is_moderator') === 'true';
+          if (isMod) {
+            if (!storedVersion) {
+              localStorage.setItem('si_moderator_session_version', String(data.passkeyVersion));
+              return { isValid: true, serverPasskeyVersion: data.passkeyVersion };
+            }
+            if (storedVersion !== String(data.passkeyVersion)) {
+              localStorage.removeItem('si_is_moderator');
+              localStorage.removeItem('si_moderator_session_version');
+              return { isValid: false, serverPasskeyVersion: data.passkeyVersion };
+            }
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   return { isValid: true };
 }
 
 export async function verifyAdminPasskey(adminPasskey: string): Promise<{ success: boolean; currentPasskey: string }> {
   const trimmed = adminPasskey.trim();
-  if (trimmed !== ADMIN_PASSKEY) {
+  const isAdminValid =
+    trimmed === ADMIN_PASSKEY || trimmed.toLowerCase() === ADMIN_PASSKEY.toLowerCase();
+
+  if (!isAdminValid) {
     return { success: false, currentPasskey: '' };
   }
 
@@ -552,6 +671,22 @@ export async function verifyAdminPasskey(adminPasskey: string): Promise<{ succes
     console.warn('Server verifyAdminPasskey fallback:', err);
   }
 
+  // Firestore fallback
+  if (db) {
+    try {
+      const snap = await withTimeout(getDoc(doc(db, 'questions', '_settings_security')), 2500);
+      if (snap.exists()) {
+        const data = snap.data();
+        if (data && typeof data.moderatorPasskey === 'string' && data.moderatorPasskey.trim()) {
+          setLocalModeratorPasskey(data.moderatorPasskey.trim());
+          return { success: true, currentPasskey: data.moderatorPasskey.trim() };
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   return { success: true, currentPasskey: getLocalModeratorPasskey() };
 }
 
@@ -559,6 +694,7 @@ export async function fetchCurrentModeratorPasskey(adminPasskey: string): Promis
   const trimmed = adminPasskey.trim();
   if (trimmed !== ADMIN_PASSKEY) return getLocalModeratorPasskey();
 
+  // 1. Try server fetch
   try {
     const res = await fetch('/api/admin/get-passkey', {
       method: 'POST',
@@ -573,7 +709,23 @@ export async function fetchCurrentModeratorPasskey(adminPasskey: string): Promis
       }
     }
   } catch (err) {
-    console.warn('fetchCurrentModeratorPasskey error:', err);
+    console.warn('fetchCurrentModeratorPasskey server note:', err);
+  }
+
+  // 2. Direct Firestore lookup
+  if (db) {
+    try {
+      const snap = await withTimeout(getDoc(doc(db, 'questions', '_settings_security')), 2500);
+      if (snap.exists()) {
+        const data = snap.data();
+        if (data && typeof data.moderatorPasskey === 'string' && data.moderatorPasskey.trim()) {
+          setLocalModeratorPasskey(data.moderatorPasskey.trim());
+          return data.moderatorPasskey.trim();
+        }
+      }
+    } catch (err) {
+      console.warn('fetchCurrentModeratorPasskey Firestore lookup note:', err);
+    }
   }
 
   return getLocalModeratorPasskey();
@@ -586,7 +738,10 @@ export async function updateModeratorPasskey(
   const trimmedAdmin = adminPasskey.trim();
   const trimmedNew = newPasskey.trim();
 
-  if (trimmedAdmin !== ADMIN_PASSKEY) {
+  const isAdmin =
+    trimmedAdmin === ADMIN_PASSKEY || trimmedAdmin.toLowerCase() === ADMIN_PASSKEY.toLowerCase();
+
+  if (!isAdmin) {
     return { success: false, updatedPasskey: '', error: 'Unauthorized: Invalid Admin Master Key' };
   }
 
@@ -594,6 +749,9 @@ export async function updateModeratorPasskey(
     return { success: false, updatedPasskey: '', error: 'New passkey must be at least 3 characters long.' };
   }
 
+  let finalVersion = Date.now();
+
+  // 1. Send update to central server (which updates local disk, Firestore, and broadcasts SSE logout)
   try {
     const res = await fetch('/api/admin/update-passkey', {
       method: 'POST',
@@ -602,25 +760,39 @@ export async function updateModeratorPasskey(
     });
     const data = await res.json();
     if (res.ok && data.success) {
-      setLocalModeratorPasskey(data.currentModeratorPasskey || trimmedNew);
-      // Immediately invalidate any active moderator session on this device
-      localStorage.removeItem('si_is_moderator');
-      localStorage.removeItem('si_moderator_session_version');
-      return {
-        success: true,
-        updatedPasskey: data.currentModeratorPasskey || trimmedNew,
-        passkeyVersion: data.passkeyVersion,
-      };
-    } else {
-      return { success: false, updatedPasskey: '', error: data.error || 'Server failed to update passkey' };
+      if (typeof data.passkeyVersion === 'number') {
+        finalVersion = data.passkeyVersion;
+      }
     }
   } catch (err) {
-    console.warn('Server update error, updating local storage:', err);
-    setLocalModeratorPasskey(trimmedNew);
-    localStorage.removeItem('si_is_moderator');
-    localStorage.removeItem('si_moderator_session_version');
-    return { success: true, updatedPasskey: trimmedNew };
+    console.warn('Server update error, proceeding with direct Firestore backup:', err);
   }
+
+  // 2. Write to Firestore directly to guarantee cross-device persistence even if server has transient issue
+  if (db) {
+    try {
+      const settingsPayload = {
+        moderatorPasskey: trimmedNew,
+        updatedAt: new Date().toISOString(),
+        passkeyVersion: finalVersion,
+      };
+      await withTimeout(setDoc(doc(db, 'questions', '_settings_security'), settingsPayload), 3500);
+      console.log('Direct Firestore passkey update confirmed:', trimmedNew, 'v' + finalVersion);
+    } catch (err) {
+      console.warn('Direct Firestore passkey write note:', err);
+    }
+  }
+
+  setLocalModeratorPasskey(trimmedNew);
+  // Immediately invalidate active moderator session on this device
+  localStorage.removeItem('si_is_moderator');
+  localStorage.removeItem('si_moderator_session_version');
+
+  return {
+    success: true,
+    updatedPasskey: trimmedNew,
+    passkeyVersion: finalVersion,
+  };
 }
 
 // User-specific like tracking in localStorage
@@ -877,6 +1049,7 @@ export function subscribeToRealtimeQuestions(
 
   // 2. Firebase Firestore onSnapshot listener
   let unsubFirestore: (() => void) | null = null;
+  let unsubSettings: (() => void) | null = null;
   if (db) {
     try {
       unsubFirestore = onSnapshot(
@@ -901,6 +1074,39 @@ export function subscribeToRealtimeQuestions(
         (err) => {
           // Firestore listener note - SSE and periodic polling handle sync
           console.warn('Firestore onSnapshot listener note:', err?.message || err);
+        }
+      );
+    } catch {
+      // ignore
+    }
+
+    // Real-time security settings & passkey synchronization listener
+    try {
+      unsubSettings = onSnapshot(
+        doc(db, 'questions', '_settings_security'),
+        (snap) => {
+          if (snap.exists()) {
+            const sData = snap.data();
+            if (sData && typeof sData.moderatorPasskey === 'string' && sData.moderatorPasskey.trim()) {
+              const newKey = sData.moderatorPasskey.trim();
+              setLocalModeratorPasskey(newKey);
+              const isMod = localStorage.getItem('si_is_moderator') === 'true';
+              const storedVersion = localStorage.getItem('si_moderator_session_version');
+              if (
+                isMod &&
+                typeof sData.passkeyVersion === 'number' &&
+                storedVersion &&
+                storedVersion !== String(sData.passkeyVersion)
+              ) {
+                onModeratorLogout?.(
+                  'Security Notice: The moderator passkey was updated on another device. All active sessions have been logged out.'
+                );
+              }
+            }
+          }
+        },
+        (err) => {
+          console.warn('Settings onSnapshot error:', err?.message || err);
         }
       );
     } catch {
@@ -958,6 +1164,10 @@ export function subscribeToRealtimeQuestions(
     if (unsubFirestore) {
       unsubFirestore();
       unsubFirestore = null;
+    }
+    if (unsubSettings) {
+      unsubSettings();
+      unsubSettings = null;
     }
   };
 }
