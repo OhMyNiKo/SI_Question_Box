@@ -1,14 +1,7 @@
+import fs from 'fs';
+import path from 'path';
 import { initializeApp, getApps, FirebaseApp } from 'firebase/app';
-import {
-  getFirestore,
-  collection,
-  getDocs,
-  doc,
-  setDoc,
-  deleteDoc,
-  Firestore,
-  setLogLevel,
-} from 'firebase/firestore';
+import { getFirestore, Firestore, setLogLevel } from 'firebase/firestore';
 
 try {
   setLogLevel('error');
@@ -16,78 +9,29 @@ try {
   // ignore
 }
 
-export interface FirebaseConfig {
-  apiKey?: string;
-  authDomain?: string;
-  projectId?: string;
-  storageBucket?: string;
-  messagingSenderId?: string;
-  appId?: string;
-}
-
-const DEFAULT_FIREBASE_CONFIG: FirebaseConfig = {
-  apiKey: "AIzaSyBkB29DWCvLthsekVDUv_B2Bogp7zzBKAw",
-  authDomain: "student-inclusion.firebaseapp.com",
-  projectId: "student-inclusion",
-  storageBucket: "student-inclusion.firebasestorage.app",
-  messagingSenderId: "900785171305",
-  appId: "1:900785171305:web:f756b06b66a4a89ce7abf8",
-};
-
-export function getFirebaseConfig(): FirebaseConfig | null {
-  const projectId =
-    process.env.FIREBASE_PROJECT_ID ||
-    process.env.VITE_FIREBASE_PROJECT_ID ||
-    DEFAULT_FIREBASE_CONFIG.projectId;
-
-  const apiKey =
-    process.env.FIREBASE_API_KEY ||
-    process.env.VITE_FIREBASE_API_KEY ||
-    DEFAULT_FIREBASE_CONFIG.apiKey;
-
-  if (!projectId || !apiKey) {
-    return null;
-  }
-
-  return {
-    apiKey,
-    authDomain:
-      process.env.FIREBASE_AUTH_DOMAIN ||
-      process.env.VITE_FIREBASE_AUTH_DOMAIN ||
-      DEFAULT_FIREBASE_CONFIG.authDomain ||
-      `${projectId}.firebaseapp.com`,
-    projectId,
-    storageBucket:
-      process.env.FIREBASE_STORAGE_BUCKET ||
-      process.env.VITE_FIREBASE_STORAGE_BUCKET ||
-      DEFAULT_FIREBASE_CONFIG.storageBucket ||
-      `${projectId}.appspot.com`,
-    messagingSenderId:
-      process.env.FIREBASE_MESSAGING_SENDER_ID ||
-      process.env.VITE_FIREBASE_MESSAGING_SENDER_ID ||
-      DEFAULT_FIREBASE_CONFIG.messagingSenderId ||
-      '',
-    appId:
-      process.env.FIREBASE_APP_ID ||
-      process.env.VITE_FIREBASE_APP_ID ||
-      DEFAULT_FIREBASE_CONFIG.appId ||
-      '',
-  };
-}
-
 let firestoreInstance: Firestore | null = null;
 
 export function getDb(): Firestore | null {
   if (firestoreInstance) return firestoreInstance;
-  const config = getFirebaseConfig();
-  if (!config) return null;
 
   try {
+    const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
+    if (!fs.existsSync(configPath)) {
+      console.warn('[Server Firebase] firebase-applet-config.json not found on disk');
+      return null;
+    }
+
+    const raw = fs.readFileSync(configPath, 'utf-8');
+    const config = JSON.parse(raw);
+
     const app: FirebaseApp = getApps().length === 0 ? initializeApp(config) : getApps()[0];
-    firestoreInstance = getFirestore(app);
+    firestoreInstance = getFirestore(app, config.firestoreDatabaseId);
+    console.log(
+      `[Server Firebase] Initialized Firestore successfully with database ID: ${config.firestoreDatabaseId}`
+    );
     return firestoreInstance;
   } catch (err) {
-    console.error('Failed to initialize Firebase Firestore:', err);
+    console.error('[Server Firebase] Failed to initialize Firestore:', err);
     return null;
   }
 }

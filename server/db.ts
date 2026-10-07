@@ -159,7 +159,7 @@ export async function getAllQuestions(): Promise<QuestionItem[]> {
   const db = getDb();
   if (db) {
     try {
-      const snap = await withTimeout(getDocs(collection(db, 'questions')), 2500);
+      const snap = await withTimeout(getDocs(collection(db, 'questions')), 3500);
       if (!snap.empty) {
         const list: QuestionItem[] = [];
         snap.forEach((d) => {
@@ -170,12 +170,19 @@ export async function getAllQuestions(): Promise<QuestionItem[]> {
             }
           }
         });
-        return list;
+        if (list.length > 0) {
+          saveLocalQuestions(list);
+          return list;
+        }
       } else {
-        // Initial seeding if Firestore collection is fresh (non-blocking)
-        Promise.all(INITIAL_QUESTIONS.map((q) => setDoc(doc(db, 'questions', q.id), q))).catch(
-          (err) => console.error('Seeding error:', err)
-        );
+        // Initial seeding if Firestore collection is fresh
+        console.log('[Server DB] Seeding initial questions to Firestore...');
+        try {
+          await Promise.all(INITIAL_QUESTIONS.map((q) => setDoc(doc(db, 'questions', q.id), q)));
+        } catch (seedErr) {
+          console.error('[Server DB] Seeding error:', seedErr);
+        }
+        saveLocalQuestions(INITIAL_QUESTIONS);
         return [...INITIAL_QUESTIONS];
       }
     } catch (err) {
@@ -317,32 +324,31 @@ function initFirestoreSettingsListener() {
   const db = getDb();
   if (!db) return;
   firestoreSettingsListenerInitialized = true;
-  try {
-    onSnapshot(
-      doc(db, 'questions', '_settings_security'),
-      (snap) => {
-        if (snap.exists()) {
-          const data = snap.data();
-          if (data && typeof data.moderatorPasskey === 'string' && data.moderatorPasskey.trim()) {
-            cachedAppSettings = {
-              moderatorPasskey: data.moderatorPasskey.trim(),
-              updatedAt: data.updatedAt || new Date().toISOString(),
-              passkeyVersion: typeof data.passkeyVersion === 'number' ? data.passkeyVersion : 1,
-            };
-            lastSettingsFetchTime = Date.now();
-            saveLocalSettings(cachedAppSettings);
-            console.log(
-              '[Server DB] Real-time synced passkey from Firestore:',
-              cachedAppSettings.moderatorPasskey,
-              'v' + cachedAppSettings.passkeyVersion
-            );
-          }
-        }
-      },
-      (err) => {
-        console.warn('[Server DB] Settings onSnapshot notice:', err.message);
+  const handleSnap = (snap: any) => {
+    if (snap.exists()) {
+      const data = snap.data();
+      if (data && typeof data.moderatorPasskey === 'string' && data.moderatorPasskey.trim()) {
+        cachedAppSettings = {
+          moderatorPasskey: data.moderatorPasskey.trim(),
+          updatedAt: data.updatedAt || new Date().toISOString(),
+          passkeyVersion: typeof data.passkeyVersion === 'number' ? data.passkeyVersion : 1,
+        };
+        lastSettingsFetchTime = Date.now();
+        saveLocalSettings(cachedAppSettings);
+        console.log(
+          '[Server DB] Real-time synced passkey from Firestore:',
+          cachedAppSettings.moderatorPasskey,
+          'v' + cachedAppSettings.passkeyVersion
+        );
       }
-    );
+    }
+  };
+
+  try {
+    onSnapshot(doc(db, 'settings', 'security'), handleSnap, (err) => {
+      console.warn('[Server DB] Settings onSnapshot notice:', err.message);
+    });
+    onSnapshot(doc(db, 'questions', '_settings_security'), handleSnap, () => {});
   } catch (err) {
     console.warn('[Server DB] Failed to init settings listener:', err);
   }
@@ -373,7 +379,10 @@ export async function getAppSettings(options?: { forceFresh?: boolean }): Promis
   const db = getDb();
   if (db) {
     try {
-      const snap = await withTimeout(getDoc(doc(db, 'questions', '_settings_security')), 2500);
+      let snap = await withTimeout(getDoc(doc(db, 'settings', 'security')), 2500);
+      if (!snap.exists()) {
+        snap = await withTimeout(getDoc(doc(db, 'questions', '_settings_security')), 2500);
+      }
       if (snap.exists()) {
         const data = snap.data();
         if (data && typeof data.moderatorPasskey === 'string' && data.moderatorPasskey.trim()) {
@@ -386,6 +395,19 @@ export async function getAppSettings(options?: { forceFresh?: boolean }): Promis
           saveLocalSettings(cachedAppSettings);
           return cachedAppSettings;
         }
+      } else {
+        // Seed default passkey to Firestore if document does not exist yet
+        const defaultSettings: AppSettings = {
+          moderatorPasskey: DEFAULT_MODERATOR_PASSKEY,
+          updatedAt: new Date().toISOString(),
+          passkeyVersion: 1,
+        };
+        await setDoc(doc(db, 'settings', 'security'), defaultSettings);
+        await setDoc(doc(db, 'questions', '_settings_security'), defaultSettings);
+        cachedAppSettings = defaultSettings;
+        lastSettingsFetchTime = Date.now();
+        saveLocalSettings(defaultSettings);
+        return defaultSettings;
       }
     } catch (err) {
       console.warn('[Server DB] Firestore getDoc settings note:', err);
@@ -426,6 +448,7 @@ export async function setModeratorPasskey(newPasskey: string): Promise<AppSettin
   if (db) {
     try {
       // Guaranteed await so all server instances and connected devices see the new passkey immediately
+      await withTimeout(setDoc(doc(db, 'settings', 'security'), settings), 4000);
       await withTimeout(setDoc(doc(db, 'questions', '_settings_security'), settings), 4000);
       console.log(
         '[Server DB] Persisted new moderator passkey to Firestore:',

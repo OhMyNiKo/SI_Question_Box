@@ -1,12 +1,16 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Allows read and write for the student voicebox questions
     match /questions/{questionId} {
       allow read, write: if true;
     }
-    // Allows read and write for app settings and security configurations
     match /settings/{settingId} {
+      allow read, write: if true;
+    }
+    match /test/{docId} {
+      allow read, write: if true;
+    }
+    match /{document=**} {
       allow read, write: if true;
     }
   }

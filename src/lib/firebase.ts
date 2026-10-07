@@ -1,5 +1,13 @@
-import { initializeApp, getApps } from 'firebase/app';
-import { getFirestore, Firestore, setLogLevel } from 'firebase/firestore';
+import { initializeApp, getApps, FirebaseApp } from 'firebase/app';
+import { getAuth, Auth } from 'firebase/auth';
+import {
+  getFirestore,
+  Firestore,
+  doc,
+  getDocFromServer,
+  setLogLevel,
+} from 'firebase/firestore';
+import firebaseConfig from '../../firebase-applet-config.json';
 
 try {
   setLogLevel('error');
@@ -7,22 +15,75 @@ try {
   // ignore
 }
 
-export const firebaseConfig = {
-  apiKey: "AIzaSyBkB29DWCvLthsekVDUv_B2Bogp7zzBKAw",
-  authDomain: "student-inclusion.firebaseapp.com",
-  projectId: "student-inclusion",
-  storageBucket: "student-inclusion.firebasestorage.app",
-  messagingSenderId: "900785171305",
-  appId: "1:900785171305:web:f756b06b66a4a89ce7abf8",
-};
-
-let dbInstance: Firestore | null = null;
-
-try {
-  const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
-  dbInstance = getFirestore(app);
-} catch (err) {
-  console.warn('Firebase initialization note:', err);
+let app: FirebaseApp;
+if (getApps().length === 0) {
+  app = initializeApp(firebaseConfig);
+} else {
+  app = getApps()[0];
 }
 
-export const db = dbInstance;
+// CRITICAL: Connect to the provisioned Firestore database
+export const db: Firestore = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+export const auth: Auth = getAuth(app);
+
+// Skill mandatory connection test on boot
+async function testConnection() {
+  try {
+    await getDocFromServer(doc(db, 'test', 'connection'));
+    console.log('[Firebase] Connected successfully to Firestore database:', firebaseConfig.firestoreDatabaseId);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.error('Please check your Firebase configuration.');
+    }
+  }
+}
+testConnection();
+
+// Skill standardized error handling
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+export interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  };
+}
+
+export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): never {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo:
+        auth.currentUser?.providerData?.map((provider) => ({
+          providerId: provider.providerId,
+          email: provider.email,
+        })) || [],
+    },
+    operationType,
+    path,
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}

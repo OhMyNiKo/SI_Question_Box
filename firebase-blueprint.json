@@ -1,0 +1,46 @@
+{
+  "entities": {
+    "Question": {
+      "title": "Question",
+      "description": "A student question submitted to Say It inclusion board",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "content": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "createdAtFormatted": { "type": "string" },
+        "reply": { "type": "string" },
+        "repliedAt": { "type": "string" },
+        "repliedAtFormatted": { "type": "string" },
+        "repliedBy": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "approved"] },
+        "category": { "type": "string" },
+        "authorName": { "type": "string" },
+        "likes": { "type": "number" },
+        "comments": { "type": "array" }
+      },
+      "required": ["id", "content", "createdAt", "status"]
+    },
+    "SecuritySettings": {
+      "title": "SecuritySettings",
+      "description": "Application security settings and active passkey",
+      "type": "object",
+      "properties": {
+        "moderatorPasskey": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "passkeyVersion": { "type": "number" }
+      },
+      "required": ["moderatorPasskey", "passkeyVersion"]
+    }
+  },
+  "firestore": {
+    "/questions/{questionId}": {
+      "schema": "Question",
+      "description": "Collection of student questions, answers, and comments"
+    },
+    "/settings/{settingId}": {
+      "schema": "SecuritySettings",
+      "description": "System security configuration and passkeys"
+    }
+  }
+}

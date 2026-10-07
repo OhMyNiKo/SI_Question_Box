@@ -7,7 +7,7 @@ import {
   getDoc,
   onSnapshot,
 } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { QuestionItem, CommentItem } from '../types';
 
 export function formatDateTime(date: Date = new Date()): string {
@@ -521,7 +521,10 @@ export async function verifyPasskeyDetailed(passkey: string): Promise<VerifyPass
   // 2. Direct Firestore fallback verification
   if (db) {
     try {
-      const snap = await withTimeout(getDoc(doc(db, 'questions', '_settings_security')), 3000);
+      let snap = await withTimeout(getDoc(doc(db, 'settings', 'security')), 3000);
+      if (!snap.exists()) {
+        snap = await withTimeout(getDoc(doc(db, 'questions', '_settings_security')), 3000);
+      }
       if (snap.exists()) {
         const data = snap.data();
         if (data && typeof data.moderatorPasskey === 'string' && data.moderatorPasskey.trim()) {
@@ -776,6 +779,7 @@ export async function updateModeratorPasskey(
         updatedAt: new Date().toISOString(),
         passkeyVersion: finalVersion,
       };
+      await withTimeout(setDoc(doc(db, 'settings', 'security'), settingsPayload), 3500);
       await withTimeout(setDoc(doc(db, 'questions', '_settings_security'), settingsPayload), 3500);
       console.log('Direct Firestore passkey update confirmed:', trimmedNew, 'v' + finalVersion);
     } catch (err) {
@@ -1082,33 +1086,36 @@ export function subscribeToRealtimeQuestions(
 
     // Real-time security settings & passkey synchronization listener
     try {
-      unsubSettings = onSnapshot(
-        doc(db, 'questions', '_settings_security'),
-        (snap) => {
-          if (snap.exists()) {
-            const sData = snap.data();
-            if (sData && typeof sData.moderatorPasskey === 'string' && sData.moderatorPasskey.trim()) {
-              const newKey = sData.moderatorPasskey.trim();
-              setLocalModeratorPasskey(newKey);
-              const isMod = localStorage.getItem('si_is_moderator') === 'true';
-              const storedVersion = localStorage.getItem('si_moderator_session_version');
-              if (
-                isMod &&
-                typeof sData.passkeyVersion === 'number' &&
-                storedVersion &&
-                storedVersion !== String(sData.passkeyVersion)
-              ) {
-                onModeratorLogout?.(
-                  'Security Notice: The moderator passkey was updated on another device. All active sessions have been logged out.'
-                );
-              }
+      const handleSettingsSnap = (snap: any) => {
+        if (snap.exists()) {
+          const sData = snap.data();
+          if (sData && typeof sData.moderatorPasskey === 'string' && sData.moderatorPasskey.trim()) {
+            const newKey = sData.moderatorPasskey.trim();
+            setLocalModeratorPasskey(newKey);
+            const isMod = localStorage.getItem('si_is_moderator') === 'true';
+            const storedVersion = localStorage.getItem('si_moderator_session_version');
+            if (
+              isMod &&
+              typeof sData.passkeyVersion === 'number' &&
+              storedVersion &&
+              storedVersion !== String(sData.passkeyVersion)
+            ) {
+              onModeratorLogout?.(
+                'Security Notice: The moderator passkey was updated on another device. All active sessions have been logged out.'
+              );
             }
           }
-        },
-        (err) => {
-          console.warn('Settings onSnapshot error:', err?.message || err);
         }
-      );
+      };
+
+      const unsubSettings1 = onSnapshot(doc(db, 'settings', 'security'), handleSettingsSnap, (err) => {
+        console.warn('Settings onSnapshot error:', err?.message || err);
+      });
+      const unsubSettings2 = onSnapshot(doc(db, 'questions', '_settings_security'), handleSettingsSnap, () => {});
+      unsubSettings = () => {
+        unsubSettings1();
+        unsubSettings2();
+      };
     } catch {
       // ignore
     }
